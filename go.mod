@@ -1,9 +1,9 @@
-module github.com/basakil/brm-server
+module github.com/collective-projects/brm-server
 
 go 1.25.5
 
 require (
-	github.com/basakil/brm-config v0.0.0
+	github.com/collective-projects/brm-config v0.0.0
 	github.com/gofrs/flock v0.13.0
 	github.com/google/uuid v1.6.0
 )
@@ -18,10 +18,9 @@ require (
 	github.com/knadh/koanf/v2 v2.3.0 // indirect
 	github.com/mitchellh/copystructure v1.2.0 // indirect
 	github.com/mitchellh/reflectwalk v1.0.2 // indirect
-	github.com/rogpeppe/go-internal v1.14.1 // indirect
 	go.yaml.in/yaml/v3 v3.0.3 // indirect
 	golang.org/x/sys v0.37.0 // indirect
 )
 
 // We should not need this line, snce we are using a workspace and the brm-config module is in the workspace
-replace github.com/basakil/brm-config => ../brm-config
+replace github.com/collective-projects/brm-config => ../brm-config

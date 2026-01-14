@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/basakil/brm-server/pkg/models"
+	"github.com/collective-projects/brm-server/pkg/models"
 )
 
 // setupTestStorage creates an ArtifactStorage instance via StorageManager for testing

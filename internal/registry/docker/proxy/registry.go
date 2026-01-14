@@ -4,9 +4,9 @@ import (
 	"fmt"
 	"net"
 
-	"github.com/basakil/brm-server/pkg/models"
+	"github.com/collective-projects/brm-server/pkg/models"
 
-	"github.com/basakil/brm-server/internal/storage"
+	"github.com/collective-projects/brm-server/internal/storage"
 )
 
 // DockerRegistryProxy implements a Docker registry proxy that caches artifacts from upstream registries
@@ -62,7 +62,7 @@ func NewDockerRegistryProxy(
 	}
 	registry.BaseRegistry.SetAlias(alias)
 	registry.BaseRegistry.SetType(models.RegistryTypeProxy)
-	registry.BaseRegistry.SetImplementationType("docker.registry")
+	registry.BaseRegistry.SetImplementationType("docker.registry.proxy")
 
 	return registry, nil
 }

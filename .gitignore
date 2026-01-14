@@ -39,7 +39,9 @@ ehthumbs.db
 Thumbs.db
 .directory
 
-# Logs
+# Logs and temporary files
 *.log
 logs/
 testdata/
+temp/
+tmp/

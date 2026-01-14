@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/basakil/brm-server/pkg/models"
+	"github.com/collective-projects/brm-server/pkg/models"
 
 	"github.com/gofrs/flock"
 )

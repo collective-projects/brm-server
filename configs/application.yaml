@@ -7,3 +7,21 @@ app:
   name: "BRM Server"
   version: "0.0.0"
   description: "Binary Repository Manager Server"
+
+# Storage configuration (object-based: aliases as keys)
+storage:
+  default_storage:
+    class: "std.filestorage"
+    params:
+      basePath: "./data/storage"
+
+# Registry configuration (object-based: aliases as keys)
+registry:
+  default_registry:
+    class: "docker.registry.private"
+    serviceBinding:
+      ip: "0.0.0.0"
+      port: 5000
+    params:
+      storageAlias: "default_storage"
+      description: "Default private Docker registry"

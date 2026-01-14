@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/basakil/brm-server/pkg/models"
+	"github.com/collective-projects/brm-server/pkg/models"
 )
 
 // TestSimpleFileStorageFileSystemStructure tests the git-like directory structure

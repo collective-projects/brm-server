@@ -7,7 +7,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/basakil/brm-server/pkg/models"
+	"github.com/collective-projects/brm-server/pkg/models"
 )
 
 // DockerRegistryProxyClient handles HTTP communication with upstream Docker registries

@@ -78,7 +78,7 @@ type Registry interface {
 	// Type returns the registry type (private, proxy, or compound).
 	Type() RegistryType
 
-	// ImplementationType returns the implementation type/class name of the registry (e.g., "docker.registry", "raw.registry").
+	// ImplementationType returns the implementation type/class name of the registry (e.g., "docker.registry.proxy", "raw.registry").
 	// This is used by managers to identify the registry implementation type.
 	ImplementationType() string
 

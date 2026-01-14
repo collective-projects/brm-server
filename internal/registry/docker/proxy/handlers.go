@@ -7,7 +7,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/basakil/brm-server/internal/registry/docker"
+	"github.com/collective-projects/brm-server/internal/registry/docker"
 )
 
 // SetupRoutes configures HTTP routes for Docker registry API endpoints

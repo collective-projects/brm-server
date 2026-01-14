@@ -7,8 +7,8 @@ import (
 	"io"
 	"testing"
 
-	"github.com/basakil/brm-server/internal/storage"
-	"github.com/basakil/brm-server/pkg/models"
+	"github.com/collective-projects/brm-server/internal/storage"
+	"github.com/collective-projects/brm-server/pkg/models"
 )
 
 // setupTestStorage creates a test storage instance

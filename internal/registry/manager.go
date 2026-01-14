@@ -2,16 +2,19 @@ package registry
 
 import (
 	"fmt"
+	"log/slog"
 	"net"
+	"net/http"
 	"regexp"
 	"strconv"
 	"sync"
+	"time"
 
-	"github.com/basakil/brm-server/pkg/models"
+	"github.com/collective-projects/brm-server/pkg/models"
 
-	"github.com/basakil/brm-config/pkg/config"
-	"github.com/basakil/brm-server/internal/registry/docker/private"
-	"github.com/basakil/brm-server/internal/registry/docker/proxy"
+	"github.com/collective-projects/brm-config/pkg/config"
+	"github.com/collective-projects/brm-server/internal/registry/docker/private"
+	"github.com/collective-projects/brm-server/internal/registry/docker/proxy"
 )
 
 var (
@@ -43,7 +46,7 @@ func GetManager() *RegistryManager {
 func (rm *RegistryManager) init() {
 	// Register Docker registry factory
 	// Parameters: [alias, serviceBinding, storageAlias, upstream, cacheTTL]
-	rm.RegisterFactory("docker.registry", func(params ...interface{}) (models.Registry, error) {
+	rm.RegisterFactory("docker.registry.proxy", func(params ...interface{}) (models.Registry, error) {
 		if len(params) < 3 {
 			return nil, fmt.Errorf("docker.registry requires at least alias, serviceBinding, storageAlias, and upstream parameters")
 		}
@@ -119,29 +122,28 @@ func (rm *RegistryManager) init() {
 	})
 }
 
-// isValidDNSName validates that a string is a valid DNS name
-// Rules: lowercase only, alphanumeric + hyphens + dots, labels 1-63 chars,
-// max 253 total, no leading/trailing hyphens, no consecutive dots
-func isValidDNSName(name string) bool {
-	// Check total length (max 253 characters)
-	if len(name) > 253 {
-		return false
-	}
-
+// isValidAlias validates that a string is a valid alias for configuration
+// Rules: lowercase only, must start with a letter, can contain letters, numbers, underscores, and dashes
+// Max length: 63 characters (to be compatible with various naming conventions)
+func isValidAlias(name string) bool {
 	// Check if empty
 	if len(name) == 0 {
 		return false
 	}
 
-	// Regex pattern for valid DNS name
-	// ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)*$
+	// Check length (max 63 characters)
+	if len(name) > 63 {
+		return false
+	}
+
+	// Regex pattern for valid alias
+	// ^[a-z]([a-z0-9_-]*[a-z0-9])?$
 	// This ensures:
-	// - Each label starts and ends with alphanumeric
-	// - Labels can contain hyphens in the middle
-	// - Labels are 1-63 characters
-	// - Multiple labels separated by dots
-	dnsPattern := regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)*$`)
-	return dnsPattern.MatchString(name)
+	// - Starts with a lowercase letter
+	// - Can contain lowercase letters, numbers, underscores, and hyphens
+	// - Ends with alphanumeric (if more than 1 character)
+	aliasPattern := regexp.MustCompile(`^[a-z]([a-z0-9_-]*[a-z0-9])?$`)
+	return aliasPattern.MatchString(name)
 }
 
 // RegisterFactory registers a registry factory function for the given class name
@@ -152,12 +154,12 @@ func (rm *RegistryManager) RegisterFactory(className string, factory func(...int
 }
 
 // Create creates a new registry instance with the given class name and alias
-// The alias must be a valid DNS name (lowercase). The params are passed to the factory function.
-// serviceBinding is optional and can be nil.
+// The alias must be a valid alias (lowercase, starting with letter, alphanumeric with underscore/dash).
+// The params are passed to the factory function. serviceBinding is optional and can be nil.
 func (rm *RegistryManager) Create(className, alias string, serviceBinding net.Addr, params ...interface{}) (models.Registry, error) {
-	// Validate alias is valid DNS name
-	if !isValidDNSName(alias) {
-		return nil, fmt.Errorf("invalid DNS name for alias: %s", alias)
+	// Validate alias format
+	if !isValidAlias(alias) {
+		return nil, fmt.Errorf("invalid alias format: %s (must be lowercase, start with letter, contain only letters, numbers, underscores, and dashes)", alias)
 	}
 
 	rm.mu.Lock()
@@ -262,83 +264,206 @@ func (rm *RegistryManager) SaveToConfig() map[string]interface{} {
 }
 
 // LoadFromConfig creates registry instances from configuration
+// Expected format: registry: { alias1: {class: ..., serviceBinding: ..., params: ...}, alias2: {...} }
 func (rm *RegistryManager) LoadFromConfig(cfg *config.Config) error {
-	registriesConfig := cfg.GetSubConfig("registries")
-	if registriesConfig == nil {
-		return nil // No registries configured
+	registryConfig := cfg.GetSubConfig("registry")
+	if registryConfig == nil {
+		return nil
 	}
 
-	aliases := registriesConfig.Keys()
+	// Get all keys under registry (each key is an alias)
+	aliases := registryConfig.Keys()
 	for _, alias := range aliases {
-		registryConfig := registriesConfig.GetSubConfig(alias)
-
-		className := registryConfig.GetString("class")
-		if className == "" {
-			return fmt.Errorf("registry %s: class is required", alias)
+		instanceConfig := registryConfig.GetSubConfig(alias)
+		if instanceConfig == nil {
+			continue
 		}
 
-		// Extract service binding
-		var serviceBinding net.Addr
-		if registryConfig.Exists("serviceBinding") {
-			sbConfig := registryConfig.GetSubConfig("serviceBinding")
-			ip := sbConfig.GetString("ip")
-			port := sbConfig.GetInt("port")
-			if ip != "" && port > 0 {
-				serviceBinding = &models.ServiceBinding{
-					IP:   ip,
-					Port: port,
-				}
-			}
-		}
-
-		// Extract parameters based on class
-		paramsConfig := registryConfig.GetSubConfig("params")
-		var params []interface{}
-
-		switch className {
-		case "docker.registry":
-			storageAlias := paramsConfig.GetString("storageAlias")
-			if storageAlias == "" {
-				return fmt.Errorf("registry %s: storageAlias is required", alias)
-			}
-
-			// Extract upstream
-			if !paramsConfig.Exists("upstream") {
-				return fmt.Errorf("registry %s: upstream is required", alias)
-			}
-			upstreamConfig := paramsConfig.GetSubConfig("upstream")
-			upstreamURL := upstreamConfig.GetString("url")
-			if upstreamURL == "" {
-				return fmt.Errorf("registry %s: upstream.url is required", alias)
-			}
-			upstream := &models.UpstreamRegistry{
-				URL:      upstreamURL,
-				Username: upstreamConfig.GetString("username"),
-				Password: upstreamConfig.GetString("password"),
-				TTL:      int64(upstreamConfig.GetInt("ttl")),
-			}
-
-			cacheTTL := int64(paramsConfig.GetInt("cacheTTL"))
-			params = []interface{}{storageAlias, upstream, cacheTTL}
-
-		case "docker.registry.private":
-			storageAlias := paramsConfig.GetString("storageAlias")
-			if storageAlias == "" {
-				return fmt.Errorf("registry %s: storageAlias is required", alias)
-			}
-			description := paramsConfig.GetString("description")
-			params = []interface{}{storageAlias, description}
-
-		default:
-			return fmt.Errorf("registry %s: unknown class %s", alias, className)
-		}
-
-		// Create registry instance
-		_, err := rm.Create(className, alias, serviceBinding, params...)
-		if err != nil {
-			return fmt.Errorf("failed to create registry %s: %w", alias, err)
+		if err := rm.createRegistryFromConfig(alias, instanceConfig); err != nil {
+			return fmt.Errorf("failed to create registry instance %s: %w", alias, err)
 		}
 	}
 
 	return nil
+}
+
+// createRegistryFromConfig creates a registry from a config sub-tree
+func (rm *RegistryManager) createRegistryFromConfig(alias string, registryConfig *config.Config) error {
+	className := registryConfig.GetString("class")
+	if className == "" {
+		return fmt.Errorf("registry %s: class is required", alias)
+	}
+
+	// Extract service binding
+	var serviceBinding net.Addr
+	if registryConfig.Exists("serviceBinding") {
+		sbConfig := registryConfig.GetSubConfig("serviceBinding")
+		ip := sbConfig.GetString("ip")
+		port := sbConfig.GetInt("port")
+		if ip != "" && port > 0 {
+			serviceBinding = &models.ServiceBinding{
+				IP:   ip,
+				Port: port,
+			}
+		}
+	}
+
+	// Extract parameters based on class
+	paramsConfig := registryConfig.GetSubConfig("params")
+	var params []interface{}
+
+	switch className {
+	case "docker.registry.proxy":
+		storageAlias := paramsConfig.GetString("storageAlias")
+		if storageAlias == "" {
+			return fmt.Errorf("registry %s: storageAlias is required", alias)
+		}
+
+		// Extract upstream
+		if !paramsConfig.Exists("upstream") {
+			return fmt.Errorf("registry %s: upstream is required", alias)
+		}
+		upstreamConfig := paramsConfig.GetSubConfig("upstream")
+		upstreamURL := upstreamConfig.GetString("url")
+		if upstreamURL == "" {
+			return fmt.Errorf("registry %s: upstream.url is required", alias)
+		}
+		upstream := &models.UpstreamRegistry{
+			URL:      upstreamURL,
+			Username: upstreamConfig.GetString("username"),
+			Password: upstreamConfig.GetString("password"),
+			TTL:      int64(upstreamConfig.GetInt("ttl")),
+		}
+
+		cacheTTL := int64(paramsConfig.GetInt("cacheTTL"))
+		params = []interface{}{storageAlias, upstream, cacheTTL}
+
+	case "docker.registry.private":
+		storageAlias := paramsConfig.GetString("storageAlias")
+		if storageAlias == "" {
+			return fmt.Errorf("registry %s: storageAlias is required", alias)
+		}
+		description := paramsConfig.GetString("description")
+		params = []interface{}{storageAlias, description}
+
+	default:
+		return fmt.Errorf("registry %s: unknown class %s", alias, className)
+	}
+
+	// Create registry instance
+	_, err := rm.Create(className, alias, serviceBinding, params...)
+	if err != nil {
+		return fmt.Errorf("failed to create registry %s: %w", alias, err)
+	}
+
+	return nil
+}
+
+// ServerInfo tracks an HTTP server and its associated registry information
+type ServerInfo struct {
+	Server        *http.Server
+	RegistryAlias string
+	Address       string
+}
+
+// StartAllServers starts HTTP servers for all registered registries.
+// Each registry is served on its own HTTP server bound to its ServiceBinding address.
+// Returns a slice of ServerInfo for graceful shutdown coordination.
+func (rm *RegistryManager) StartAllServers(readTimeout, writeTimeout, idleTimeout time.Duration, logger *slog.Logger) ([]*ServerInfo, error) {
+	rm.mu.RLock()
+	registries := make([]models.Registry, 0, len(rm.registries))
+	for _, registry := range rm.registries {
+		registries = append(registries, registry)
+	}
+	rm.mu.RUnlock()
+
+	var servers []*ServerInfo
+	addresses := make(map[string]bool) // Track addresses to detect conflicts
+
+	for _, registry := range registries {
+		// Get ServiceBinding
+		var serviceBinding net.Addr
+		switch impl := registry.(type) {
+		case *private.DockerRegistryPrivate:
+			serviceBinding = impl.GetServiceBinding()
+		case *proxy.DockerRegistryProxy:
+			serviceBinding = impl.GetServiceBinding()
+		default:
+			logger.Warn("Registry does not support HTTP serving", "alias", registry.Alias(), "type", registry.ImplementationType())
+			continue
+		}
+
+		if serviceBinding == nil {
+			logger.Warn("Registry has no service binding, skipping", "alias", registry.Alias())
+			continue
+		}
+
+		address := serviceBinding.String()
+
+		// Check for port conflicts
+		if addresses[address] {
+			return nil, fmt.Errorf("port conflict: multiple registries configured for address %s", address)
+		}
+		addresses[address] = true
+
+		// Create HTTP mux and setup routes based on implementation type
+		mux := http.NewServeMux()
+		implType := registry.ImplementationType()
+
+		switch implType {
+		case "docker.registry.private":
+			privateReg, ok := registry.(*private.DockerRegistryPrivate)
+			if !ok {
+				return nil, fmt.Errorf("registry %s: type assertion failed for docker.registry.private", registry.Alias())
+			}
+			service := privateReg.Service()
+			private.SetupRoutes(mux, service)
+
+		case "docker.registry.proxy":
+			proxyReg, ok := registry.(*proxy.DockerRegistryProxy)
+			if !ok {
+				return nil, fmt.Errorf("registry %s: type assertion failed for docker.registry", registry.Alias())
+			}
+			service := proxyReg.Service()
+			proxy.SetupRoutes(mux, service)
+
+		default:
+			logger.Warn("Unknown registry implementation type, skipping", "alias", registry.Alias(), "type", implType)
+			continue
+		}
+
+		// Create HTTP server
+		server := &http.Server{
+			Addr:         address,
+			Handler:      mux,
+			ReadTimeout:  readTimeout,
+			WriteTimeout: writeTimeout,
+			IdleTimeout:  idleTimeout,
+		}
+
+		// Start server in goroutine
+		go func(srv *http.Server, alias, addr string) {
+			logger.Info("Starting registry HTTP server", "alias", alias, "address", addr)
+			if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+				logger.Error("Registry HTTP server failed", "alias", alias, "address", addr, "error", err)
+			}
+		}(server, registry.Alias(), address)
+
+		servers = append(servers, &ServerInfo{
+			Server:        server,
+			RegistryAlias: registry.Alias(),
+			Address:       address,
+		})
+	}
+
+	if len(servers) > 0 {
+		logger.Info("Started HTTP servers for registries", "count", len(servers))
+		for _, srv := range servers {
+			logger.Info("Registry server running", "alias", srv.RegistryAlias, "address", srv.Address)
+		}
+	} else {
+		logger.Warn("No registries with valid service bindings found")
+	}
+
+	return servers, nil
 }

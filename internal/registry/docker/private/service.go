@@ -10,8 +10,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/basakil/brm-server/internal/registry/docker"
-	"github.com/basakil/brm-server/pkg/models"
+	"github.com/collective-projects/brm-server/internal/registry/docker"
+	"github.com/collective-projects/brm-server/pkg/models"
 )
 
 // DockerRegistryPrivateService handles core registry logic for private registries

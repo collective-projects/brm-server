@@ -6,8 +6,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/basakil/brm-config/pkg/config"
-	"github.com/basakil/brm-server/pkg/models"
+	"github.com/collective-projects/brm-config/pkg/config"
+	"github.com/collective-projects/brm-server/pkg/models"
 )
 
 var (
@@ -160,29 +160,28 @@ func (sm *StorageManager) init() {
 	})
 }
 
-// isValidDNSName validates that a string is a valid DNS name
-// Rules: lowercase only, alphanumeric + hyphens + dots, labels 1-63 chars,
-// max 253 total, no leading/trailing hyphens, no consecutive dots
-func isValidDNSName(name string) bool {
-	// Check total length (max 253 characters)
-	if len(name) > 253 {
-		return false
-	}
-
+// isValidAlias validates that a string is a valid alias for configuration
+// Rules: lowercase only, must start with a letter, can contain letters, numbers, underscores, and dashes
+// Max length: 63 characters (to be compatible with various naming conventions)
+func isValidAlias(name string) bool {
 	// Check if empty
 	if len(name) == 0 {
 		return false
 	}
 
-	// Regex pattern for valid DNS name
-	// ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)*$
+	// Check length (max 63 characters)
+	if len(name) > 63 {
+		return false
+	}
+
+	// Regex pattern for valid alias
+	// ^[a-z]([a-z0-9_-]*[a-z0-9])?$
 	// This ensures:
-	// - Each label starts and ends with alphanumeric
-	// - Labels can contain hyphens in the middle
-	// - Labels are 1-63 characters
-	// - Multiple labels separated by dots
-	dnsPattern := regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)*$`)
-	return dnsPattern.MatchString(name)
+	// - Starts with a lowercase letter
+	// - Can contain lowercase letters, numbers, underscores, and hyphens
+	// - Ends with alphanumeric (if more than 1 character)
+	aliasPattern := regexp.MustCompile(`^[a-z]([a-z0-9_-]*[a-z0-9])?$`)
+	return aliasPattern.MatchString(name)
 }
 
 // RegisterFactory registers a storage factory function for the given class name
@@ -193,11 +192,12 @@ func (sm *StorageManager) RegisterFactory(className string, factory func(...inte
 }
 
 // Create creates a new storage instance with the given class name and alias
-// The alias must be a valid DNS name (lowercase). The params are passed to the factory function.
+// The alias must be a valid alias (lowercase, starting with letter, alphanumeric with underscore/dash).
+// The params are passed to the factory function.
 func (sm *StorageManager) Create(className, alias string, params ...interface{}) (models.ArtifactStorage, error) {
-	// Validate alias is valid DNS name
-	if !isValidDNSName(alias) {
-		return nil, fmt.Errorf("invalid DNS name for alias: %s", alias)
+	// Validate alias format
+	if !isValidAlias(alias) {
+		return nil, fmt.Errorf("invalid alias format: %s (must be lowercase, start with letter, contain only letters, numbers, underscores, and dashes)", alias)
 	}
 
 	sm.mu.Lock()
@@ -299,72 +299,86 @@ func (sm *StorageManager) SaveToConfig() map[string]interface{} {
 }
 
 // LoadFromConfig creates storage instances from configuration
+// Expected format: storage: { alias1: {class: ..., params: ...}, alias2: {...} }
 func (sm *StorageManager) LoadFromConfig(cfg *config.Config) error {
-	storagesConfig := cfg.GetSubConfig("storages")
-	if storagesConfig == nil {
-		return nil // No storages configured
+	storageConfig := cfg.GetSubConfig("storage")
+	if storageConfig == nil {
+		return nil
 	}
 
-	aliases := storagesConfig.Keys()
+	// Get all keys under storage (each key is an alias)
+	aliases := storageConfig.Keys()
 	for _, alias := range aliases {
-		storageConfig := storagesConfig.GetSubConfig(alias)
-
-		className := storageConfig.GetString("class")
-		if className == "" {
-			return fmt.Errorf("storage %s: class is required", alias)
+		instanceConfig := storageConfig.GetSubConfig(alias)
+		if instanceConfig == nil {
+			continue
 		}
 
-		// Extract parameters based on class
-		paramsConfig := storageConfig.GetSubConfig("params")
-		var params []interface{}
+		if err := sm.createStorageFromConfig(alias, instanceConfig); err != nil {
+			return fmt.Errorf("failed to create storage instance %s: %w", alias, err)
+		}
+	}
 
-		switch className {
-		case "std.filestorage":
-			basePath := paramsConfig.GetString("basePath")
-			if basePath == "" {
-				return fmt.Errorf("storage %s: basePath is required", alias)
-			}
-			params = []interface{}{basePath}
+	return nil
+}
 
-		case "concurrent.filestorage":
-			baseDir := paramsConfig.GetString("baseDir")
-			lockDir := paramsConfig.GetString("lockDir")
-			lockTimeoutStr := paramsConfig.GetString("lockTimeout")
-			if baseDir == "" || lockDir == "" || lockTimeoutStr == "" {
-				return fmt.Errorf("storage %s: baseDir, lockDir, and lockTimeout are required", alias)
-			}
+// createStorageFromConfig creates a storage from a config sub-tree
+func (sm *StorageManager) createStorageFromConfig(alias string, storageConfig *config.Config) error {
+	className := storageConfig.GetString("class")
+	if className == "" {
+		return fmt.Errorf("storage %s: class is required", alias)
+	}
+
+	// Extract parameters based on class
+	paramsConfig := storageConfig.GetSubConfig("params")
+	var params []interface{}
+
+	switch className {
+	case "std.filestorage":
+		basePath := paramsConfig.GetString("basePath")
+		if basePath == "" {
+			return fmt.Errorf("storage %s: basePath is required", alias)
+		}
+		params = []interface{}{basePath}
+
+	case "concurrent.filestorage":
+		baseDir := paramsConfig.GetString("baseDir")
+		lockDir := paramsConfig.GetString("lockDir")
+		lockTimeoutStr := paramsConfig.GetString("lockTimeout")
+		if baseDir == "" || lockDir == "" || lockTimeoutStr == "" {
+			return fmt.Errorf("storage %s: baseDir, lockDir, and lockTimeout are required", alias)
+		}
+		lockTimeout, err := time.ParseDuration(lockTimeoutStr)
+		if err != nil {
+			return fmt.Errorf("storage %s: invalid lockTimeout: %w", alias, err)
+		}
+		params = []interface{}{baseDir, lockDir, lockTimeout}
+
+	case "hashcomputing.filestorage":
+		baseDir := paramsConfig.GetString("baseDir")
+		if baseDir == "" {
+			return fmt.Errorf("storage %s: baseDir is required", alias)
+		}
+		lockDir := paramsConfig.GetString("lockDir")
+		lockTimeoutStr := paramsConfig.GetString("lockTimeout")
+		if lockDir != "" && lockTimeoutStr != "" {
 			lockTimeout, err := time.ParseDuration(lockTimeoutStr)
 			if err != nil {
 				return fmt.Errorf("storage %s: invalid lockTimeout: %w", alias, err)
 			}
 			params = []interface{}{baseDir, lockDir, lockTimeout}
-
-		case "hashcomputing.filestorage":
-			baseDir := paramsConfig.GetString("baseDir")
-			if baseDir == "" {
-				return fmt.Errorf("storage %s: baseDir is required", alias)
-			}
-			lockDir := paramsConfig.GetString("lockDir")
-			lockTimeoutStr := paramsConfig.GetString("lockTimeout")
-			if lockDir != "" && lockTimeoutStr != "" {
-				lockTimeout, err := time.ParseDuration(lockTimeoutStr)
-				if err != nil {
-					return fmt.Errorf("storage %s: invalid lockTimeout: %w", alias, err)
-				}
-				params = []interface{}{baseDir, lockDir, lockTimeout}
-			} else {
-				params = []interface{}{baseDir}
-			}
-
-		default:
-			return fmt.Errorf("storage %s: unknown class %s", alias, className)
+		} else {
+			params = []interface{}{baseDir}
 		}
 
-		// Create storage instance
-		_, err := sm.Create(className, alias, params...)
-		if err != nil {
-			return fmt.Errorf("failed to create storage %s: %w", alias, err)
-		}
+	default:
+		return fmt.Errorf("storage %s: unknown class %s", alias, className)
+	}
+
+	// Create storage instance
+	_, err := sm.Create(className, alias, params...)
+	if err != nil {
+		return fmt.Errorf("failed to create storage %s: %w", alias, err)
 	}
 
 	return nil
