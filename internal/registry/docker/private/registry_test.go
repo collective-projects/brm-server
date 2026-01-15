@@ -4,6 +4,7 @@ import (
 	"net"
 	"testing"
 
+	"github.com/collective-projects/brm-server/pkg/configkeys"
 	"github.com/collective-projects/brm-server/internal/storage"
 	"github.com/collective-projects/brm-server/pkg/models"
 )
@@ -19,7 +20,7 @@ func setupTestRegistry(t *testing.T) *DockerRegistryPrivate {
 
 	// Register storage in manager
 	storageManager := storage.GetManager()
-	_, err = storageManager.Create("std.filestorage", "test-storage", baseDir)
+	_, err = storageManager.Create(configkeys.StorageClassStdFile, "test-storage", baseDir)
 	if err != nil {
 		// May already exist, that's okay
 	}
@@ -53,7 +54,7 @@ func TestNewDockerRegistryPrivate(t *testing.T) {
 	}
 
 	storageManager := storage.GetManager()
-	_, err = storageManager.Create("std.filestorage", "test-storage", baseDir)
+	_, err = storageManager.Create(configkeys.StorageClassStdFile, "test-storage", baseDir)
 	if err != nil {
 		// May already exist
 	}
@@ -78,8 +79,8 @@ func TestNewDockerRegistryPrivate(t *testing.T) {
 		t.Errorf("Expected type %v, got %v", models.RegistryTypePrivate, registry.Type())
 	}
 
-	if registry.ImplementationType() != "docker.registry.private" {
-		t.Errorf("Expected implementation type 'docker.registry.private', got %s", registry.ImplementationType())
+	if registry.ImplementationType() != configkeys.RegistryClassDockerPrivate {
+		t.Errorf("Expected implementation type %q, got %s", configkeys.RegistryClassDockerPrivate, registry.ImplementationType())
 	}
 
 	if registry.Alias() != "test-registry" {
@@ -122,7 +123,7 @@ func TestDockerRegistryPrivateType(t *testing.T) {
 func TestDockerRegistryPrivateImplementationType(t *testing.T) {
 	registry := setupTestRegistry(t)
 
-	expected := "docker.registry.private"
+	expected := configkeys.RegistryClassDockerPrivate
 	if registry.ImplementationType() != expected {
 		t.Errorf("Expected %s, got %s", expected, registry.ImplementationType())
 	}

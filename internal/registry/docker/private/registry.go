@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net"
 
+	"github.com/collective-projects/brm-server/pkg/configkeys"
 	"github.com/collective-projects/brm-server/internal/storage"
 	"github.com/collective-projects/brm-server/pkg/models"
 )
@@ -52,7 +53,7 @@ func NewDockerRegistryPrivate(
 	}
 	registry.BaseRegistry.SetAlias(alias)
 	registry.BaseRegistry.SetType(models.RegistryTypePrivate)
-	registry.BaseRegistry.SetImplementationType("docker.registry.private")
+	registry.BaseRegistry.SetImplementationType(configkeys.RegistryClassDockerPrivate)
 
 	return registry, nil
 }

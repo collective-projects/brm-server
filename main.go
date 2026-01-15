@@ -76,7 +76,7 @@ func initializeStorage(cfg *config.Config, logger *slog.Logger) error {
 	storageManager := storage.GetManager()
 
 	// Load storage instances from configuration
-	if err := storageManager.LoadFromConfig(cfg); err != nil {
+	if err := storageManager.LoadFromConfig(cfg, logger); err != nil {
 		return fmt.Errorf("failed to load storage configuration: %w", err)
 	}
 
@@ -89,7 +89,7 @@ func initializeRegistry(cfg *config.Config, logger *slog.Logger) error {
 	registryManager := registry.GetManager()
 
 	// Load registry instances from configuration
-	if err := registryManager.LoadFromConfig(cfg); err != nil {
+	if err := registryManager.LoadFromConfig(cfg, logger); err != nil {
 		return fmt.Errorf("failed to load registry configuration: %w", err)
 	}
 

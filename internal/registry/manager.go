@@ -15,6 +15,7 @@ import (
 	"github.com/collective-projects/brm-config/pkg/config"
 	"github.com/collective-projects/brm-server/internal/registry/docker/private"
 	"github.com/collective-projects/brm-server/internal/registry/docker/proxy"
+	"github.com/collective-projects/brm-server/pkg/configkeys"
 )
 
 var (
@@ -46,7 +47,7 @@ func GetManager() *RegistryManager {
 func (rm *RegistryManager) init() {
 	// Register Docker registry factory
 	// Parameters: [alias, serviceBinding, storageAlias, upstream, cacheTTL]
-	rm.RegisterFactory("docker.registry.proxy", func(params ...interface{}) (models.Registry, error) {
+	rm.RegisterFactory(configkeys.RegistryClassDockerProxy, func(params ...interface{}) (models.Registry, error) {
 		if len(params) < 3 {
 			return nil, fmt.Errorf("docker.registry requires at least alias, serviceBinding, storageAlias, and upstream parameters")
 		}
@@ -87,7 +88,7 @@ func (rm *RegistryManager) init() {
 
 	// Register Docker private registry factory
 	// Parameters: [alias, serviceBinding, storageAlias, description]
-	rm.RegisterFactory("docker.registry.private", func(params ...interface{}) (models.Registry, error) {
+	rm.RegisterFactory(configkeys.RegistryClassDockerPrivate, func(params ...interface{}) (models.Registry, error) {
 		if len(params) < 2 {
 			return nil, fmt.Errorf("docker.registry.private requires at least alias and serviceBinding parameters")
 		}
@@ -220,37 +221,37 @@ func (rm *RegistryManager) SaveToConfig() map[string]interface{} {
 	result := make(map[string]interface{})
 	for alias, registry := range rm.registries {
 		regConfig := map[string]interface{}{
-			"class": registry.ImplementationType(),
-			"alias": registry.Alias(),
+			configkeys.KeyClass: registry.ImplementationType(),
+			configkeys.KeyAlias: registry.Alias(),
 		}
 
 		// Extract implementation-specific config
 		switch impl := registry.(type) {
 		case *private.DockerRegistryPrivate:
 			params := map[string]interface{}{
-				"storageAlias": impl.GetStorageAlias(),
+				configkeys.KeyStorageAlias: impl.GetStorageAlias(),
 			}
 			if desc := impl.GetDescription(); desc != "" {
-				params["description"] = desc
+				params[configkeys.KeyDescription] = desc
 			}
-			regConfig["params"] = params
+			regConfig[configkeys.KeyParams] = params
 			if sb := rm.convertServiceBinding(impl.GetServiceBinding()); sb != nil {
-				regConfig["serviceBinding"] = sb
+				regConfig[configkeys.KeyServiceBinding] = sb
 			}
 
 		case *proxy.DockerRegistryProxy:
 			params := map[string]interface{}{
-				"storageAlias": impl.GetStorageAlias(),
+				configkeys.KeyStorageAlias: impl.GetStorageAlias(),
 			}
 			if upstream := impl.GetUpstream(); upstream != nil {
-				params["upstream"] = upstream
+				params[configkeys.KeyUpstream] = upstream
 			}
 			if cacheTTL := impl.GetCacheTTL(); cacheTTL > 0 {
-				params["cacheTTL"] = cacheTTL
+				params[configkeys.KeyCacheTTL] = cacheTTL
 			}
-			regConfig["params"] = params
+			regConfig[configkeys.KeyParams] = params
 			if sb := rm.convertServiceBinding(impl.GetServiceBinding()); sb != nil {
-				regConfig["serviceBinding"] = sb
+				regConfig[configkeys.KeyServiceBinding] = sb
 			}
 
 		default:
@@ -265,21 +266,28 @@ func (rm *RegistryManager) SaveToConfig() map[string]interface{} {
 
 // LoadFromConfig creates registry instances from configuration
 // Expected format: registry: { alias1: {class: ..., serviceBinding: ..., params: ...}, alias2: {...} }
-func (rm *RegistryManager) LoadFromConfig(cfg *config.Config) error {
-	registryConfig := cfg.GetSubConfig("registry")
+func (rm *RegistryManager) LoadFromConfig(cfg *config.Config, logger *slog.Logger) error {
+	if logger == nil {
+		logger = slog.Default()
+	}
+
+	registryConfig := cfg.GetSubConfig(configkeys.SectionRegistry)
 	if registryConfig == nil {
+		logger.Info("No registry configuration found; skipping registry initialization")
 		return nil
 	}
 
 	// Get all keys under registry (each key is an alias)
 	aliases := registryConfig.Keys()
+	logger.Info("Registry aliases discovered from configuration", "count", len(aliases), "aliases", aliases)
 	for _, alias := range aliases {
 		instanceConfig := registryConfig.GetSubConfig(alias)
 		if instanceConfig == nil {
+			logger.Warn("Registry alias config missing; skipping", "alias", alias)
 			continue
 		}
 
-		if err := rm.createRegistryFromConfig(alias, instanceConfig); err != nil {
+		if err := rm.createRegistryFromConfig(alias, instanceConfig, logger); err != nil {
 			return fmt.Errorf("failed to create registry instance %s: %w", alias, err)
 		}
 	}
@@ -288,18 +296,22 @@ func (rm *RegistryManager) LoadFromConfig(cfg *config.Config) error {
 }
 
 // createRegistryFromConfig creates a registry from a config sub-tree
-func (rm *RegistryManager) createRegistryFromConfig(alias string, registryConfig *config.Config) error {
-	className := registryConfig.GetString("class")
+func (rm *RegistryManager) createRegistryFromConfig(alias string, registryConfig *config.Config, logger *slog.Logger) error {
+	if logger == nil {
+		logger = slog.Default()
+	}
+
+	className := registryConfig.GetString(configkeys.KeyClass)
 	if className == "" {
 		return fmt.Errorf("registry %s: class is required", alias)
 	}
 
 	// Extract service binding
 	var serviceBinding net.Addr
-	if registryConfig.Exists("serviceBinding") {
-		sbConfig := registryConfig.GetSubConfig("serviceBinding")
-		ip := sbConfig.GetString("ip")
-		port := sbConfig.GetInt("port")
+	if registryConfig.Exists(configkeys.KeyServiceBinding) {
+		sbConfig := registryConfig.GetSubConfig(configkeys.KeyServiceBinding)
+		ip := sbConfig.GetString(configkeys.KeyIP)
+		port := sbConfig.GetInt(configkeys.KeyPort)
 		if ip != "" && port > 0 {
 			serviceBinding = &models.ServiceBinding{
 				IP:   ip,
@@ -309,41 +321,41 @@ func (rm *RegistryManager) createRegistryFromConfig(alias string, registryConfig
 	}
 
 	// Extract parameters based on class
-	paramsConfig := registryConfig.GetSubConfig("params")
+	paramsConfig := registryConfig.GetSubConfig(configkeys.KeyParams)
 	var params []interface{}
 
 	switch className {
-	case "docker.registry.proxy":
-		storageAlias := paramsConfig.GetString("storageAlias")
+	case configkeys.RegistryClassDockerProxy:
+		storageAlias := paramsConfig.GetString(configkeys.KeyStorageAlias)
 		if storageAlias == "" {
 			return fmt.Errorf("registry %s: storageAlias is required", alias)
 		}
 
 		// Extract upstream
-		if !paramsConfig.Exists("upstream") {
+		if !paramsConfig.Exists(configkeys.KeyUpstream) {
 			return fmt.Errorf("registry %s: upstream is required", alias)
 		}
-		upstreamConfig := paramsConfig.GetSubConfig("upstream")
-		upstreamURL := upstreamConfig.GetString("url")
+		upstreamConfig := paramsConfig.GetSubConfig(configkeys.KeyUpstream)
+		upstreamURL := upstreamConfig.GetString(configkeys.KeyURL)
 		if upstreamURL == "" {
 			return fmt.Errorf("registry %s: upstream.url is required", alias)
 		}
 		upstream := &models.UpstreamRegistry{
 			URL:      upstreamURL,
-			Username: upstreamConfig.GetString("username"),
-			Password: upstreamConfig.GetString("password"),
-			TTL:      int64(upstreamConfig.GetInt("ttl")),
+			Username: upstreamConfig.GetString(configkeys.KeyUsername),
+			Password: upstreamConfig.GetString(configkeys.KeyPassword),
+			TTL:      int64(upstreamConfig.GetInt(configkeys.KeyTTL)),
 		}
 
-		cacheTTL := int64(paramsConfig.GetInt("cacheTTL"))
+		cacheTTL := int64(paramsConfig.GetInt(configkeys.KeyCacheTTL))
 		params = []interface{}{storageAlias, upstream, cacheTTL}
 
-	case "docker.registry.private":
-		storageAlias := paramsConfig.GetString("storageAlias")
+	case configkeys.RegistryClassDockerPrivate:
+		storageAlias := paramsConfig.GetString(configkeys.KeyStorageAlias)
 		if storageAlias == "" {
 			return fmt.Errorf("registry %s: storageAlias is required", alias)
 		}
-		description := paramsConfig.GetString("description")
+		description := paramsConfig.GetString(configkeys.KeyDescription)
 		params = []interface{}{storageAlias, description}
 
 	default:
@@ -356,6 +368,53 @@ func (rm *RegistryManager) createRegistryFromConfig(alias string, registryConfig
 		return fmt.Errorf("failed to create registry %s: %w", alias, err)
 	}
 
+	// Avoid logging secrets (upstream password). Only log safe fields.
+	switch className {
+	case configkeys.RegistryClassDockerProxy:
+		var storageAlias string
+		if len(params) >= 1 {
+			storageAlias, _ = params[0].(string)
+		}
+		var upstreamURL string
+		var upstreamUsername string
+		if len(params) >= 2 {
+			if up, ok := params[1].(*models.UpstreamRegistry); ok && up != nil {
+				upstreamURL = up.URL
+				upstreamUsername = up.Username
+			}
+		}
+		var cacheTTL interface{}
+		if len(params) >= 3 {
+			cacheTTL = params[2]
+		}
+		logger.Info("Registry instance created",
+			"alias", alias,
+			"class", className,
+			"serviceBinding", serviceBinding,
+			"storageAlias", storageAlias,
+			"upstreamURL", upstreamURL,
+			"upstreamUsername", upstreamUsername,
+			"cacheTTL", cacheTTL,
+		)
+	case configkeys.RegistryClassDockerPrivate:
+		var storageAlias string
+		if len(params) >= 1 {
+			storageAlias, _ = params[0].(string)
+		}
+		var description string
+		if len(params) >= 2 {
+			description, _ = params[1].(string)
+		}
+		logger.Info("Registry instance created",
+			"alias", alias,
+			"class", className,
+			"serviceBinding", serviceBinding,
+			"storageAlias", storageAlias,
+			"description", description,
+		)
+	default:
+		logger.Info("Registry instance created", "alias", alias, "class", className, "serviceBinding", serviceBinding)
+	}
 	return nil
 }
 
@@ -411,7 +470,7 @@ func (rm *RegistryManager) StartAllServers(readTimeout, writeTimeout, idleTimeou
 		implType := registry.ImplementationType()
 
 		switch implType {
-		case "docker.registry.private":
+		case configkeys.RegistryClassDockerPrivate:
 			privateReg, ok := registry.(*private.DockerRegistryPrivate)
 			if !ok {
 				return nil, fmt.Errorf("registry %s: type assertion failed for docker.registry.private", registry.Alias())
@@ -419,7 +478,7 @@ func (rm *RegistryManager) StartAllServers(readTimeout, writeTimeout, idleTimeou
 			service := privateReg.Service()
 			private.SetupRoutes(mux, service)
 
-		case "docker.registry.proxy":
+		case configkeys.RegistryClassDockerProxy:
 			proxyReg, ok := registry.(*proxy.DockerRegistryProxy)
 			if !ok {
 				return nil, fmt.Errorf("registry %s: type assertion failed for docker.registry", registry.Alias())

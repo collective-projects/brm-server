@@ -45,3 +45,7 @@ logs/
 testdata/
 temp/
 tmp/
+
+## output binaries
+bin/
+brm-server

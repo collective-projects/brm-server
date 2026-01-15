@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/collective-projects/brm-server/pkg/configkeys"
 	"github.com/collective-projects/brm-server/pkg/models"
 )
 
@@ -17,7 +18,7 @@ func TestStorageManagerCreate(t *testing.T) {
 	manager := GetManager()
 
 	t.Run("create_with_valid_dns_alias", func(t *testing.T) {
-		storage, err := manager.Create("std.filestorage", "valid-storage", baseDir)
+		storage, err := manager.Create(configkeys.StorageClassStdFile, "valid-storage", baseDir)
 		if err != nil {
 			t.Fatalf("Failed to create storage with valid alias: %v", err)
 		}
@@ -32,7 +33,7 @@ func TestStorageManagerCreate(t *testing.T) {
 	})
 
 	t.Run("create_with_invalid_dns_alias", func(t *testing.T) {
-		_, err := manager.Create("std.filestorage", "Invalid-Storage", baseDir)
+		_, err := manager.Create(configkeys.StorageClassStdFile, "Invalid-Storage", baseDir)
 		if err == nil {
 			t.Error("Expected error for invalid DNS alias")
 		}
@@ -40,12 +41,12 @@ func TestStorageManagerCreate(t *testing.T) {
 
 	t.Run("create_with_duplicate_alias", func(t *testing.T) {
 		alias := "duplicate-test"
-		_, err := manager.Create("std.filestorage", alias, baseDir)
+		_, err := manager.Create(configkeys.StorageClassStdFile, alias, baseDir)
 		if err != nil {
 			t.Fatalf("First create failed: %v", err)
 		}
 
-		_, err = manager.Create("std.filestorage", alias, baseDir)
+		_, err = manager.Create(configkeys.StorageClassStdFile, alias, baseDir)
 		if err == nil {
 			t.Error("Expected error for duplicate alias")
 		}
@@ -104,7 +105,7 @@ func TestStorageManagerConcurrentFileStorage(t *testing.T) {
 	lockTimeout := 30 * time.Second
 
 	// Create concurrent file storage via manager
-	storage, err := manager.Create("concurrent.filestorage", "concurrent-test", baseDir, lockDir, lockTimeout)
+	storage, err := manager.Create(configkeys.StorageClassConcurrentFile, "concurrent-test", baseDir, lockDir, lockTimeout)
 	if err != nil {
 		t.Fatalf("Failed to create concurrent storage: %v", err)
 	}
@@ -134,7 +135,7 @@ func TestStorageManagerHashComputingFileStorage(t *testing.T) {
 	baseDir := t.TempDir()
 
 	// Create hash computing file storage via manager (simple version)
-	storage, err := manager.Create("hashcomputing.filestorage", "hashcomputing-test", baseDir)
+	storage, err := manager.Create(configkeys.StorageClassHashComputingFile, "hashcomputing-test", baseDir)
 	if err != nil {
 		t.Fatalf("Failed to create hash computing storage: %v", err)
 	}

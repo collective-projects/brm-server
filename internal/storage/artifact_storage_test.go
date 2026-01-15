@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/collective-projects/brm-server/pkg/configkeys"
 	"github.com/collective-projects/brm-server/pkg/models"
 )
 
@@ -43,7 +44,7 @@ func setupTestStorage(t *testing.T) (models.ArtifactStorage, string) {
 		alias = "test-" + alias
 	}
 
-	storage, err := manager.Create("std.filestorage", alias, baseDir)
+	storage, err := manager.Create(configkeys.StorageClassStdFile, alias, baseDir)
 	if err != nil {
 		t.Fatalf("Failed to create storage: %v", err)
 	}

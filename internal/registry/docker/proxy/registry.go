@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net"
 
+	"github.com/collective-projects/brm-server/pkg/configkeys"
 	"github.com/collective-projects/brm-server/pkg/models"
 
 	"github.com/collective-projects/brm-server/internal/storage"
@@ -62,7 +63,7 @@ func NewDockerRegistryProxy(
 	}
 	registry.BaseRegistry.SetAlias(alias)
 	registry.BaseRegistry.SetType(models.RegistryTypeProxy)
-	registry.BaseRegistry.SetImplementationType("docker.registry.proxy")
+	registry.BaseRegistry.SetImplementationType(configkeys.RegistryClassDockerProxy)
 
 	return registry, nil
 }

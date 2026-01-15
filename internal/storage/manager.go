@@ -2,11 +2,13 @@ package storage
 
 import (
 	"fmt"
+	"log/slog"
 	"regexp"
 	"sync"
 	"time"
 
 	"github.com/collective-projects/brm-config/pkg/config"
+	"github.com/collective-projects/brm-server/pkg/configkeys"
 	"github.com/collective-projects/brm-server/pkg/models"
 )
 
@@ -48,7 +50,7 @@ func GetManager() *StorageManager {
 func (sm *StorageManager) init() {
 	// Register SimpleFileStorage factory
 	// Parameters: [alias, basePath]
-	sm.RegisterFactory("std.filestorage", func(params ...interface{}) (models.ArtifactStorage, error) {
+	sm.RegisterFactory(configkeys.StorageClassStdFile, func(params ...interface{}) (models.ArtifactStorage, error) {
 		if len(params) < 2 {
 			return nil, fmt.Errorf("filestorage requires alias and basePath parameters")
 		}
@@ -65,7 +67,7 @@ func (sm *StorageManager) init() {
 
 	// Register ConcurrentArtifactStorage factory
 	// Parameters: [alias, baseDir, lockDir, lockTimeout]
-	sm.RegisterFactory("concurrent.filestorage", func(params ...interface{}) (models.ArtifactStorage, error) {
+	sm.RegisterFactory(configkeys.StorageClassConcurrentFile, func(params ...interface{}) (models.ArtifactStorage, error) {
 		if len(params) < 4 {
 			return nil, fmt.Errorf("concurrent.filestorage requires alias, baseDir, lockDir, and lockTimeout parameters")
 		}
@@ -104,7 +106,7 @@ func (sm *StorageManager) init() {
 	// Parameters: [alias, baseDir] or [alias, baseDir, lockDir, lockTimeout]
 	// If 2 parameters: wraps SimpleFileStorage
 	// If 4 parameters: wraps ConcurrentArtifactStorage
-	sm.RegisterFactory("hashcomputing.filestorage", func(params ...interface{}) (models.ArtifactStorage, error) {
+	sm.RegisterFactory(configkeys.StorageClassHashComputingFile, func(params ...interface{}) (models.ArtifactStorage, error) {
 		if len(params) < 2 {
 			return nil, fmt.Errorf("hashcomputing.filestorage requires at least alias and baseDir parameters")
 		}
@@ -239,42 +241,42 @@ func (sm *StorageManager) extractParams(className string, params []interface{}) 
 	result := make(map[string]interface{})
 
 	switch className {
-	case "std.filestorage":
+	case configkeys.StorageClassStdFile:
 		// Factory receives: [alias, basePath]
 		// params passed to Create: [basePath]
 		if len(params) >= 1 {
 			if basePath, ok := params[0].(string); ok {
-				result["basePath"] = basePath
+				result[configkeys.KeyBasePath] = basePath
 			}
 		}
-	case "concurrent.filestorage":
+	case configkeys.StorageClassConcurrentFile:
 		// Factory receives: [alias, baseDir, lockDir, lockTimeout]
 		// params passed to Create: [baseDir, lockDir, lockTimeout]
 		if len(params) >= 3 {
 			if baseDir, ok := params[0].(string); ok {
-				result["baseDir"] = baseDir
+				result[configkeys.KeyBaseDir] = baseDir
 			}
 			if lockDir, ok := params[1].(string); ok {
-				result["lockDir"] = lockDir
+				result[configkeys.KeyLockDir] = lockDir
 			}
 			if lockTimeout, ok := params[2].(time.Duration); ok {
-				result["lockTimeout"] = lockTimeout.String()
+				result[configkeys.KeyLockTimeout] = lockTimeout.String()
 			}
 		}
-	case "hashcomputing.filestorage":
+	case configkeys.StorageClassHashComputingFile:
 		// Factory receives: [alias, baseDir] or [alias, baseDir, lockDir, lockTimeout]
 		// params passed to Create: [baseDir] or [baseDir, lockDir, lockTimeout]
 		if len(params) >= 1 {
 			if baseDir, ok := params[0].(string); ok {
-				result["baseDir"] = baseDir
+				result[configkeys.KeyBaseDir] = baseDir
 			}
 		}
 		if len(params) >= 3 {
 			if lockDir, ok := params[1].(string); ok {
-				result["lockDir"] = lockDir
+				result[configkeys.KeyLockDir] = lockDir
 			}
 			if lockTimeout, ok := params[2].(time.Duration); ok {
-				result["lockTimeout"] = lockTimeout.String()
+				result[configkeys.KeyLockTimeout] = lockTimeout.String()
 			}
 		}
 	}
@@ -290,9 +292,9 @@ func (sm *StorageManager) SaveToConfig() map[string]interface{} {
 	result := make(map[string]interface{})
 	for alias, cfg := range sm.configs {
 		result[alias] = map[string]interface{}{
-			"class":  cfg.Class,
-			"alias":  cfg.Alias,
-			"params": cfg.Params,
+			configkeys.KeyClass:  cfg.Class,
+			configkeys.KeyAlias:  cfg.Alias,
+			configkeys.KeyParams: cfg.Params,
 		}
 	}
 	return result
@@ -300,21 +302,28 @@ func (sm *StorageManager) SaveToConfig() map[string]interface{} {
 
 // LoadFromConfig creates storage instances from configuration
 // Expected format: storage: { alias1: {class: ..., params: ...}, alias2: {...} }
-func (sm *StorageManager) LoadFromConfig(cfg *config.Config) error {
-	storageConfig := cfg.GetSubConfig("storage")
+func (sm *StorageManager) LoadFromConfig(cfg *config.Config, logger *slog.Logger) error {
+	if logger == nil {
+		logger = slog.Default()
+	}
+
+	storageConfig := cfg.GetSubConfig(configkeys.SectionStorage)
 	if storageConfig == nil {
+		logger.Info("No storage configuration found; skipping storage initialization")
 		return nil
 	}
 
 	// Get all keys under storage (each key is an alias)
 	aliases := storageConfig.Keys()
+	logger.Info("Storage aliases discovered from configuration", "count", len(aliases), "aliases", aliases)
 	for _, alias := range aliases {
 		instanceConfig := storageConfig.GetSubConfig(alias)
 		if instanceConfig == nil {
+			logger.Warn("Storage alias config missing; skipping", "alias", alias)
 			continue
 		}
 
-		if err := sm.createStorageFromConfig(alias, instanceConfig); err != nil {
+		if err := sm.createStorageFromConfig(alias, instanceConfig, logger); err != nil {
 			return fmt.Errorf("failed to create storage instance %s: %w", alias, err)
 		}
 	}
@@ -323,28 +332,32 @@ func (sm *StorageManager) LoadFromConfig(cfg *config.Config) error {
 }
 
 // createStorageFromConfig creates a storage from a config sub-tree
-func (sm *StorageManager) createStorageFromConfig(alias string, storageConfig *config.Config) error {
-	className := storageConfig.GetString("class")
+func (sm *StorageManager) createStorageFromConfig(alias string, storageConfig *config.Config, logger *slog.Logger) error {
+	if logger == nil {
+		logger = slog.Default()
+	}
+
+	className := storageConfig.GetString(configkeys.KeyClass)
 	if className == "" {
 		return fmt.Errorf("storage %s: class is required", alias)
 	}
 
 	// Extract parameters based on class
-	paramsConfig := storageConfig.GetSubConfig("params")
+	paramsConfig := storageConfig.GetSubConfig(configkeys.KeyParams)
 	var params []interface{}
 
 	switch className {
-	case "std.filestorage":
-		basePath := paramsConfig.GetString("basePath")
+	case configkeys.StorageClassStdFile:
+		basePath := paramsConfig.GetString(configkeys.KeyBasePath)
 		if basePath == "" {
 			return fmt.Errorf("storage %s: basePath is required", alias)
 		}
 		params = []interface{}{basePath}
 
-	case "concurrent.filestorage":
-		baseDir := paramsConfig.GetString("baseDir")
-		lockDir := paramsConfig.GetString("lockDir")
-		lockTimeoutStr := paramsConfig.GetString("lockTimeout")
+	case configkeys.StorageClassConcurrentFile:
+		baseDir := paramsConfig.GetString(configkeys.KeyBaseDir)
+		lockDir := paramsConfig.GetString(configkeys.KeyLockDir)
+		lockTimeoutStr := paramsConfig.GetString(configkeys.KeyLockTimeout)
 		if baseDir == "" || lockDir == "" || lockTimeoutStr == "" {
 			return fmt.Errorf("storage %s: baseDir, lockDir, and lockTimeout are required", alias)
 		}
@@ -354,13 +367,13 @@ func (sm *StorageManager) createStorageFromConfig(alias string, storageConfig *c
 		}
 		params = []interface{}{baseDir, lockDir, lockTimeout}
 
-	case "hashcomputing.filestorage":
-		baseDir := paramsConfig.GetString("baseDir")
+	case configkeys.StorageClassHashComputingFile:
+		baseDir := paramsConfig.GetString(configkeys.KeyBaseDir)
 		if baseDir == "" {
 			return fmt.Errorf("storage %s: baseDir is required", alias)
 		}
-		lockDir := paramsConfig.GetString("lockDir")
-		lockTimeoutStr := paramsConfig.GetString("lockTimeout")
+		lockDir := paramsConfig.GetString(configkeys.KeyLockDir)
+		lockTimeoutStr := paramsConfig.GetString(configkeys.KeyLockTimeout)
 		if lockDir != "" && lockTimeoutStr != "" {
 			lockTimeout, err := time.ParseDuration(lockTimeoutStr)
 			if err != nil {
@@ -381,6 +394,7 @@ func (sm *StorageManager) createStorageFromConfig(alias string, storageConfig *c
 		return fmt.Errorf("failed to create storage %s: %w", alias, err)
 	}
 
+	logger.Info("Storage instance created", "alias", alias, "class", className, "params", sm.extractParams(className, params))
 	return nil
 }
 
