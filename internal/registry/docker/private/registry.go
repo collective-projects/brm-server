@@ -3,19 +3,17 @@ package private
 import (
 	"fmt"
 	"net"
+	"net/http"
 
-	"github.com/collective-projects/brm-server/pkg/configkeys"
 	"github.com/collective-projects/brm-server/internal/storage"
+	"github.com/collective-projects/brm-server/pkg/configkeys"
 	"github.com/collective-projects/brm-server/pkg/models"
 )
 
 // DockerRegistryPrivate implements a private Docker registry that stores artifacts locally
 type DockerRegistryPrivate struct {
-	models.BaseRegistry
-	storageAlias   string
-	serviceBinding net.Addr
-	description    string
-	service        *DockerRegistryPrivateService
+	models.PrivateRegistry // Embed PrivateRegistry instead of BaseRegistry
+	service                *DockerRegistryPrivateService
 }
 
 // NewDockerRegistryPrivate creates a new private Docker registry instance
@@ -46,34 +44,35 @@ func NewDockerRegistryPrivate(
 	service.SetStorage(storageInstance)
 
 	registry := &DockerRegistryPrivate{
-		storageAlias:   storageAlias,
-		serviceBinding: serviceBinding,
-		description:    description,
-		service:        service,
+		PrivateRegistry: models.PrivateRegistry{
+			BaseRegistry: models.BaseRegistry{
+				Alias:              alias,
+				RegistryType:       models.RegistryTypePrivate,
+				ImplementationType: configkeys.RegistryClassDockerPrivate,
+				ServiceBinding:     serviceBinding,
+				StorageAlias:       storageAlias,
+				Description:        description,
+			},
+		},
+		service: service,
 	}
-	registry.BaseRegistry.SetAlias(alias)
-	registry.BaseRegistry.SetType(models.RegistryTypePrivate)
-	registry.BaseRegistry.SetImplementationType(configkeys.RegistryClassDockerPrivate)
 
 	return registry, nil
 }
 
-// Service returns the Docker registry service instance
-func (d *DockerRegistryPrivate) Service() *DockerRegistryPrivateService {
-	return d.service
+// SetupRoutes implements Registry interface.
+// This is called by RegistryManager to configure routes for this registry.
+func (d *DockerRegistryPrivate) SetupRoutes(mux *http.ServeMux) error {
+	SetupRoutes(mux, d.service)
+	return nil
 }
 
 // GetStorageAlias returns the storage alias
 func (d *DockerRegistryPrivate) GetStorageAlias() string {
-	return d.storageAlias
-}
-
-// GetServiceBinding returns the service binding
-func (d *DockerRegistryPrivate) GetServiceBinding() net.Addr {
-	return d.serviceBinding
+	return d.StorageAlias
 }
 
 // GetDescription returns the description
 func (d *DockerRegistryPrivate) GetDescription() string {
-	return d.description
+	return d.Description
 }

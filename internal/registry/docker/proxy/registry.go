@@ -3,21 +3,17 @@ package proxy
 import (
 	"fmt"
 	"net"
-
-	"github.com/collective-projects/brm-server/pkg/configkeys"
-	"github.com/collective-projects/brm-server/pkg/models"
+	"net/http"
 
 	"github.com/collective-projects/brm-server/internal/storage"
+	"github.com/collective-projects/brm-server/pkg/configkeys"
+	"github.com/collective-projects/brm-server/pkg/models"
 )
 
 // DockerRegistryProxy implements a Docker registry proxy that caches artifacts from upstream registries
 type DockerRegistryProxy struct {
-	models.BaseRegistry
-	storageAlias   string
-	upstream       *models.UpstreamRegistry
-	serviceBinding net.Addr
-	cacheTTL       int64
-	service        *DockerRegistryProxyService
+	models.ProxyRegistry // Embed ProxyRegistry instead of BaseRegistry
+	service              *DockerRegistryProxyService
 }
 
 // NewDockerRegistryProxy creates a new Docker registry proxy instance
@@ -55,40 +51,41 @@ func NewDockerRegistryProxy(
 	service.SetStorage(storageInstance)
 
 	registry := &DockerRegistryProxy{
-		storageAlias:   storageAlias,
-		upstream:       upstream,
-		serviceBinding: serviceBinding,
-		cacheTTL:       cacheTTL,
-		service:        service,
+		ProxyRegistry: models.ProxyRegistry{
+			BaseRegistry: models.BaseRegistry{
+				Alias:              alias,
+				RegistryType:       models.RegistryTypeProxy,
+				ImplementationType: configkeys.RegistryClassDockerProxy,
+				ServiceBinding:     serviceBinding,
+				StorageAlias:       storageAlias,
+			},
+			Upstream: upstream,
+			CacheTTL: cacheTTL,
+		},
+		service: service,
 	}
-	registry.BaseRegistry.SetAlias(alias)
-	registry.BaseRegistry.SetType(models.RegistryTypeProxy)
-	registry.BaseRegistry.SetImplementationType(configkeys.RegistryClassDockerProxy)
 
 	return registry, nil
 }
 
-// Service returns the Docker registry service instance
-func (d *DockerRegistryProxy) Service() *DockerRegistryProxyService {
-	return d.service
+// SetupRoutes implements Registry interface.
+// This is called by RegistryManager to configure routes for this registry.
+func (d *DockerRegistryProxy) SetupRoutes(mux *http.ServeMux) error {
+	SetupRoutes(mux, d.service)
+	return nil
 }
 
 // GetStorageAlias returns the storage alias
 func (d *DockerRegistryProxy) GetStorageAlias() string {
-	return d.storageAlias
+	return d.StorageAlias
 }
 
 // GetUpstream returns the upstream registry configuration
 func (d *DockerRegistryProxy) GetUpstream() *models.UpstreamRegistry {
-	return d.upstream
-}
-
-// GetServiceBinding returns the service binding
-func (d *DockerRegistryProxy) GetServiceBinding() net.Addr {
-	return d.serviceBinding
+	return d.Upstream
 }
 
 // GetCacheTTL returns the cache TTL
 func (d *DockerRegistryProxy) GetCacheTTL() int64 {
-	return d.cacheTTL
+	return d.CacheTTL
 }

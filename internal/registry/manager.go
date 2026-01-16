@@ -220,9 +220,23 @@ func (rm *RegistryManager) SaveToConfig() map[string]interface{} {
 
 	result := make(map[string]interface{})
 	for alias, registry := range rm.registries {
+		// Extract base fields using type assertion
+		var implementationType string
+		var registryAlias string
+		switch impl := registry.(type) {
+		case *private.DockerRegistryPrivate:
+			implementationType = impl.ImplementationType
+			registryAlias = impl.Alias
+		case *proxy.DockerRegistryProxy:
+			implementationType = impl.ImplementationType
+			registryAlias = impl.Alias
+		default:
+			continue
+		}
+
 		regConfig := map[string]interface{}{
-			configkeys.KeyClass: registry.ImplementationType(),
-			configkeys.KeyAlias: registry.Alias(),
+			configkeys.KeyClass: implementationType,
+			configkeys.KeyAlias: registryAlias,
 		}
 
 		// Extract implementation-specific config
@@ -235,7 +249,7 @@ func (rm *RegistryManager) SaveToConfig() map[string]interface{} {
 				params[configkeys.KeyDescription] = desc
 			}
 			regConfig[configkeys.KeyParams] = params
-			if sb := rm.convertServiceBinding(impl.GetServiceBinding()); sb != nil {
+			if sb := rm.convertServiceBinding(impl.ServiceBinding); sb != nil {
 				regConfig[configkeys.KeyServiceBinding] = sb
 			}
 
@@ -250,7 +264,7 @@ func (rm *RegistryManager) SaveToConfig() map[string]interface{} {
 				params[configkeys.KeyCacheTTL] = cacheTTL
 			}
 			regConfig[configkeys.KeyParams] = params
-			if sb := rm.convertServiceBinding(impl.GetServiceBinding()); sb != nil {
+			if sb := rm.convertServiceBinding(impl.ServiceBinding); sb != nil {
 				regConfig[configkeys.KeyServiceBinding] = sb
 			}
 
@@ -440,20 +454,24 @@ func (rm *RegistryManager) StartAllServers(readTimeout, writeTimeout, idleTimeou
 	addresses := make(map[string]bool) // Track addresses to detect conflicts
 
 	for _, registry := range registries {
-		// Get ServiceBinding
+		// Get ServiceBinding and Alias directly from the registry struct (through embedding)
 		var serviceBinding net.Addr
-		switch impl := registry.(type) {
+		var alias string
+		switch r := registry.(type) {
 		case *private.DockerRegistryPrivate:
-			serviceBinding = impl.GetServiceBinding()
+			serviceBinding = r.ServiceBinding
+			alias = r.Alias
 		case *proxy.DockerRegistryProxy:
-			serviceBinding = impl.GetServiceBinding()
+			serviceBinding = r.ServiceBinding
+			alias = r.Alias
 		default:
-			logger.Warn("Registry does not support HTTP serving", "alias", registry.Alias(), "type", registry.ImplementationType())
+			// Unknown type - skip
 			continue
 		}
 
 		if serviceBinding == nil {
-			logger.Warn("Registry has no service binding, skipping", "alias", registry.Alias())
+			logger.Warn("Registry has no service binding configured, skipping HTTP server creation",
+				"alias", alias)
 			continue
 		}
 
@@ -461,34 +479,14 @@ func (rm *RegistryManager) StartAllServers(readTimeout, writeTimeout, idleTimeou
 
 		// Check for port conflicts
 		if addresses[address] {
-			return nil, fmt.Errorf("port conflict: multiple registries configured for address %s", address)
+			return nil, fmt.Errorf("port conflict: multiple registries trying to bind to %s", address)
 		}
 		addresses[address] = true
 
-		// Create HTTP mux and setup routes based on implementation type
+		// Create HTTP mux and let the registry configure its own routes
 		mux := http.NewServeMux()
-		implType := registry.ImplementationType()
-
-		switch implType {
-		case configkeys.RegistryClassDockerPrivate:
-			privateReg, ok := registry.(*private.DockerRegistryPrivate)
-			if !ok {
-				return nil, fmt.Errorf("registry %s: type assertion failed for docker.registry.private", registry.Alias())
-			}
-			service := privateReg.Service()
-			private.SetupRoutes(mux, service)
-
-		case configkeys.RegistryClassDockerProxy:
-			proxyReg, ok := registry.(*proxy.DockerRegistryProxy)
-			if !ok {
-				return nil, fmt.Errorf("registry %s: type assertion failed for docker.registry", registry.Alias())
-			}
-			service := proxyReg.Service()
-			proxy.SetupRoutes(mux, service)
-
-		default:
-			logger.Warn("Unknown registry implementation type, skipping", "alias", registry.Alias(), "type", implType)
-			continue
+		if err := registry.SetupRoutes(mux); err != nil {
+			return nil, fmt.Errorf("failed to setup routes for registry %s: %w", alias, err)
 		}
 
 		// Create HTTP server
@@ -506,11 +504,11 @@ func (rm *RegistryManager) StartAllServers(readTimeout, writeTimeout, idleTimeou
 			if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 				logger.Error("Registry HTTP server failed", "alias", alias, "address", addr, "error", err)
 			}
-		}(server, registry.Alias(), address)
+		}(server, alias, address)
 
 		servers = append(servers, &ServerInfo{
 			Server:        server,
-			RegistryAlias: registry.Alias(),
+			RegistryAlias: alias,
 			Address:       address,
 		})
 	}
