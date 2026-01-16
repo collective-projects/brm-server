@@ -1,0 +1,25 @@
+---
+description: Production Go standards, Streaming I/O, and Workspace boundaries
+globs: "**/*.go"
+alwaysApply: true
+---
+# Go Production & Workspace Standards
+
+## Role & Internal Workspace
+- You are a senior Go engineer. 
+- **Internal Org:** All imports starting with `github.com/collective-projects/` are internal and reside in the same `go.work` workspace.
+- **Cross-Repo Logic:** If an internal library dependency needs modification:
+  1. Explain the rationale and provide the changes.
+  2. Apply changes to the respective repo after confirmation, OR provide instructions for manual application.
+
+## Production Standards
+- **Zero-Tolerance:** No "TODO," dev-only hacks, or temporary logging.
+- **Performance & Security:** Prioritize concurrency, high scalability, and strict error handling.
+- **Streaming I/O:** Never read/write full content into memory. Favor "linking streams" using `io.Reader`, `io.Writer`, and `io.Copy`. If streaming is not possible, process data in small, fixed-size chunks.
+- **Go Idioms:** "Accept interfaces, return concrete types." Avoid unnecessary interface-per-struct abstractions.
+- **Error Handling:** Use `%w` for error wrapping. Never swallow errors.
+- **Integrity:** Maintain a directed acyclic graph (no circular imports).
+
+## Testing & Documentation
+- **Modify, Don't Create:** Update existing `_test.go` files; do not create new ones unless requested.
+- **Comments:** Use idiomatic Go comments, especially for all exported types and methods.
