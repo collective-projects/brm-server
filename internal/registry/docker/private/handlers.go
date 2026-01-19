@@ -3,6 +3,7 @@ package private
 import (
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
@@ -12,64 +13,134 @@ import (
 
 // SetupRoutes configures HTTP routes for Docker registry API endpoints
 func SetupRoutes(mux *http.ServeMux, service *DockerRegistryPrivateService) {
-	// API version check
-	mux.HandleFunc("GET /v2/", func(w http.ResponseWriter, r *http.Request) {
-		handleAPIVersion(w, r)
+	// Catch-all handler for /v2/ endpoints - we'll dispatch based on path and method
+	mux.HandleFunc("/v2/", func(w http.ResponseWriter, r *http.Request) {
+		dispatchRequest(w, r, service)
 	})
+	mux.HandleFunc("/v2", func(w http.ResponseWriter, r *http.Request) {
+		dispatchRequest(w, r, service)
+	})
+}
 
-	// Manifest endpoints (read)
-	mux.HandleFunc("GET /v2/{name}/manifests/{reference}", func(w http.ResponseWriter, r *http.Request) {
-		handleGetManifest(w, r, service)
-	})
-	mux.HandleFunc("HEAD /v2/{name}/manifests/{reference}", func(w http.ResponseWriter, r *http.Request) {
-		handleHeadManifest(w, r, service)
-	})
+// dispatchRequest routes requests to appropriate handlers based on path and method
+func dispatchRequest(w http.ResponseWriter, r *http.Request, service *DockerRegistryPrivateService) {
+	path := r.URL.Path
+	method := r.Method
 
-	// Manifest endpoints (write)
-	mux.HandleFunc("PUT /v2/{name}/manifests/{reference}", func(w http.ResponseWriter, r *http.Request) {
-		handlePutManifest(w, r, service)
-	})
+	slog.Debug("Request received", "method", method, "path", path)
 
-	// Blob endpoints (read)
-	mux.HandleFunc("GET /v2/{name}/blobs/{digest}", func(w http.ResponseWriter, r *http.Request) {
-		handleGetBlob(w, r, service)
-	})
-	mux.HandleFunc("HEAD /v2/{name}/blobs/{digest}", func(w http.ResponseWriter, r *http.Request) {
-		handleHeadBlob(w, r, service)
-	})
+	// API version check: GET /v2/
+	if path == "/v2/" || path == "/v2" {
+		if method == http.MethodGet {
+			handleAPIVersion(w, r)
+			return
+		}
+		slog.Warn("Method not allowed for API version check", "method", method, "path", path)
+		docker.WriteError(w, docker.ErrUnsupported("method not allowed"))
+		return
+	}
 
-	// Blob upload endpoints (write)
-	mux.HandleFunc("POST /v2/{name}/blobs/uploads/", func(w http.ResponseWriter, r *http.Request) {
-		handleStartBlobUpload(w, r, service)
-	})
-	mux.HandleFunc("PATCH /v2/{name}/blobs/uploads/{uuid}", func(w http.ResponseWriter, r *http.Request) {
-		handleUploadBlobChunk(w, r, service)
-	})
-	mux.HandleFunc("PUT /v2/{name}/blobs/uploads/{uuid}", func(w http.ResponseWriter, r *http.Request) {
-		handleCompleteBlobUpload(w, r, service)
-	})
+	// Remove /v2/ prefix for easier parsing
+	pathRest := strings.TrimPrefix(path, "/v2/")
+
+	// Match manifest endpoints: /v2/{name}/manifests/{reference}
+	if strings.Contains(pathRest, "/manifests/") {
+		parts := strings.Split(pathRest, "/manifests/")
+		if len(parts) == 2 && parts[0] != "" && parts[1] != "" {
+			switch method {
+			case http.MethodGet:
+				handleGetManifest(w, r, service)
+			case http.MethodHead:
+				handleHeadManifest(w, r, service)
+			case http.MethodPut:
+				handlePutManifest(w, r, service)
+			default:
+				slog.Warn("Method not allowed for manifest endpoint", "method", method, "path", path)
+				docker.WriteError(w, docker.ErrUnsupported("method not allowed"))
+			}
+			return
+		}
+	}
+
+	// Match blob endpoints: /v2/{name}/blobs/{digest}
+	if strings.Contains(pathRest, "/blobs/") && !strings.Contains(pathRest, "/blobs/uploads") {
+		parts := strings.Split(pathRest, "/blobs/")
+		if len(parts) == 2 && parts[0] != "" && parts[1] != "" {
+			switch method {
+			case http.MethodGet:
+				handleGetBlob(w, r, service)
+			case http.MethodHead:
+				handleHeadBlob(w, r, service)
+			default:
+				slog.Warn("Method not allowed for blob endpoint", "method", method, "path", path)
+				docker.WriteError(w, docker.ErrUnsupported("method not allowed"))
+			}
+			return
+		}
+	}
+
+	// Match blob upload endpoints: /v2/{name}/blobs/uploads/
+	if strings.Contains(pathRest, "/blobs/uploads/") {
+		parts := strings.Split(pathRest, "/blobs/uploads/")
+		if len(parts) == 2 && parts[0] != "" {
+			uuid := parts[1]
+			// POST /v2/{name}/blobs/uploads/ (start upload)
+			if uuid == "" {
+				if method == http.MethodPost {
+					handleStartBlobUpload(w, r, service)
+					return
+				}
+				slog.Warn("Method not allowed for start blob upload", "method", method, "path", path)
+				docker.WriteError(w, docker.ErrUnsupported("method not allowed"))
+				return
+			}
+			// PATCH or PUT /v2/{name}/blobs/uploads/{uuid}
+			switch method {
+			case http.MethodPatch:
+				handleUploadBlobChunk(w, r, service)
+			case http.MethodPut:
+				handleCompleteBlobUpload(w, r, service)
+			default:
+				slog.Warn("Method not allowed for blob upload session", "method", method, "path", path)
+				docker.WriteError(w, docker.ErrUnsupported("method not allowed"))
+			}
+			return
+		}
+	}
+
+	// No route matched
+	slog.Warn("No matching route", "method", method, "path", path)
+	http.NotFound(w, r)
 }
 
 // handleAPIVersion handles GET /v2/ - API version check
 func handleAPIVersion(w http.ResponseWriter, r *http.Request) {
+	slog.Debug("API version check", "method", r.Method, "path", r.URL.Path)
+
 	if r.Method != http.MethodGet {
+		slog.Warn("Method not allowed for API version check", "method", r.Method, "path", r.URL.Path)
 		docker.WriteError(w, docker.ErrUnsupported("method not allowed"))
 		return
 	}
 
 	w.Header().Set("Docker-Distribution-API-Version", "registry/2.0")
 	w.WriteHeader(http.StatusOK)
+	slog.Debug("API version check successful")
 }
 
 // handleGetManifest handles GET /v2/{name}/manifests/{reference}
 func handleGetManifest(w http.ResponseWriter, r *http.Request, service *DockerRegistryPrivateService) {
+	slog.Debug("GET manifest request", "method", r.Method, "path", r.URL.Path)
+
 	if r.Method != http.MethodGet {
+		slog.Warn("Method not allowed for GET manifest", "method", r.Method, "path", r.URL.Path)
 		docker.WriteError(w, docker.ErrUnsupported("method not allowed"))
 		return
 	}
 
 	name, reference, err := parseManifestPath(r.URL.Path)
 	if err != nil {
+		slog.Warn("Failed to parse manifest path", "path", r.URL.Path, "error", err)
 		docker.WriteError(w, docker.ErrNameUnknown(""))
 		return
 	}
@@ -94,13 +165,17 @@ func handleGetManifest(w http.ResponseWriter, r *http.Request, service *DockerRe
 
 // handleHeadManifest handles HEAD /v2/{name}/manifests/{reference}
 func handleHeadManifest(w http.ResponseWriter, r *http.Request, service *DockerRegistryPrivateService) {
+	slog.Debug("HEAD manifest request", "method", r.Method, "path", r.URL.Path)
+
 	if r.Method != http.MethodHead {
+		slog.Warn("Method not allowed for HEAD manifest", "method", r.Method, "path", r.URL.Path)
 		docker.WriteError(w, docker.ErrUnsupported("method not allowed"))
 		return
 	}
 
 	name, reference, err := parseManifestPath(r.URL.Path)
 	if err != nil {
+		slog.Warn("Failed to parse manifest path", "path", r.URL.Path, "error", err)
 		docker.WriteError(w, docker.ErrNameUnknown(""))
 		return
 	}
@@ -123,13 +198,17 @@ func handleHeadManifest(w http.ResponseWriter, r *http.Request, service *DockerR
 
 // handlePutManifest handles PUT /v2/{name}/manifests/{reference}
 func handlePutManifest(w http.ResponseWriter, r *http.Request, service *DockerRegistryPrivateService) {
+	slog.Debug("PUT manifest request", "method", r.Method, "path", r.URL.Path, "contentType", r.Header.Get("Content-Type"))
+
 	if r.Method != http.MethodPut {
+		slog.Warn("Method not allowed for PUT manifest", "method", r.Method, "path", r.URL.Path)
 		docker.WriteError(w, docker.ErrUnsupported("method not allowed"))
 		return
 	}
 
 	name, reference, err := parseManifestPath(r.URL.Path)
 	if err != nil {
+		slog.Warn("Failed to parse manifest path", "path", r.URL.Path, "error", err)
 		docker.WriteError(w, docker.ErrNameUnknown(""))
 		return
 	}
@@ -164,13 +243,17 @@ func handlePutManifest(w http.ResponseWriter, r *http.Request, service *DockerRe
 
 // handleGetBlob handles GET /v2/{name}/blobs/{digest}
 func handleGetBlob(w http.ResponseWriter, r *http.Request, service *DockerRegistryPrivateService) {
+	slog.Debug("GET blob request", "method", r.Method, "path", r.URL.Path)
+
 	if r.Method != http.MethodGet {
+		slog.Warn("Method not allowed for GET blob", "method", r.Method, "path", r.URL.Path)
 		docker.WriteError(w, docker.ErrUnsupported("method not allowed"))
 		return
 	}
 
 	name, digest, err := parseBlobPath(r.URL.Path)
 	if err != nil {
+		slog.Warn("Failed to parse blob path", "path", r.URL.Path, "error", err)
 		docker.WriteError(w, docker.ErrNameUnknown(""))
 		return
 	}
@@ -193,13 +276,17 @@ func handleGetBlob(w http.ResponseWriter, r *http.Request, service *DockerRegist
 
 // handleHeadBlob handles HEAD /v2/{name}/blobs/{digest}
 func handleHeadBlob(w http.ResponseWriter, r *http.Request, service *DockerRegistryPrivateService) {
+	slog.Debug("HEAD blob request (checking if blob exists)", "method", r.Method, "path", r.URL.Path)
+
 	if r.Method != http.MethodHead {
+		slog.Warn("Method not allowed for HEAD blob", "method", r.Method, "path", r.URL.Path, "expectedMethod", "HEAD")
 		docker.WriteError(w, docker.ErrUnsupported("method not allowed"))
 		return
 	}
 
 	name, digest, err := parseBlobPath(r.URL.Path)
 	if err != nil {
+		slog.Warn("Failed to parse blob path", "path", r.URL.Path, "error", err)
 		docker.WriteError(w, docker.ErrNameUnknown(""))
 		return
 	}
@@ -223,13 +310,17 @@ func handleHeadBlob(w http.ResponseWriter, r *http.Request, service *DockerRegis
 
 // handleStartBlobUpload handles POST /v2/{name}/blobs/uploads/
 func handleStartBlobUpload(w http.ResponseWriter, r *http.Request, service *DockerRegistryPrivateService) {
+	slog.Debug("POST start blob upload request", "method", r.Method, "path", r.URL.Path, "query", r.URL.RawQuery)
+
 	if r.Method != http.MethodPost {
+		slog.Warn("Method not allowed for POST blob upload", "method", r.Method, "path", r.URL.Path)
 		docker.WriteError(w, docker.ErrUnsupported("method not allowed"))
 		return
 	}
 
 	name, err := parseBlobUploadBasePath(r.URL.Path)
 	if err != nil {
+		slog.Warn("Failed to parse blob upload path", "path", r.URL.Path, "error", err)
 		docker.WriteError(w, docker.ErrNameUnknown(""))
 		return
 	}
@@ -291,13 +382,17 @@ func handleSingleRequestBlobUpload(w http.ResponseWriter, r *http.Request, servi
 
 // handleUploadBlobChunk handles PATCH /v2/{name}/blobs/uploads/{uuid}
 func handleUploadBlobChunk(w http.ResponseWriter, r *http.Request, service *DockerRegistryPrivateService) {
+	slog.Debug("PATCH upload blob chunk request", "method", r.Method, "path", r.URL.Path)
+
 	if r.Method != http.MethodPatch {
+		slog.Warn("Method not allowed for PATCH blob upload", "method", r.Method, "path", r.URL.Path)
 		docker.WriteError(w, docker.ErrUnsupported("method not allowed"))
 		return
 	}
 
 	name, uuid, err := parseBlobUploadPath(r.URL.Path)
 	if err != nil {
+		slog.Warn("Failed to parse blob upload path", "path", r.URL.Path, "error", err)
 		docker.WriteError(w, docker.ErrBlobUploadUnknown("invalid upload path"))
 		return
 	}
@@ -324,25 +419,33 @@ func handleUploadBlobChunk(w http.ResponseWriter, r *http.Request, service *Dock
 	// Upload chunk
 	newOffset, err := service.UploadBlobChunk(r.Context(), name, uuid, r.Body, offset)
 	if err != nil {
+		slog.Warn("Failed to upload blob chunk", "name", name, "uuid", uuid, "error", err)
 		docker.WriteError(w, docker.ErrBlobUploadUnknown(err.Error()))
 		return
 	}
 
-	// Set headers
+	// Set headers per Docker Registry HTTP API V2 spec
+	location := fmt.Sprintf("/v2/%s/blobs/uploads/%s", name, uuid)
+	w.Header().Set("Location", location)
 	w.Header().Set("Range", fmt.Sprintf("0-%d", newOffset-1))
 	w.Header().Set("Docker-Upload-UUID", uuid)
-	w.WriteHeader(http.StatusNoContent)
+	w.WriteHeader(http.StatusAccepted)
+	slog.Debug("Blob chunk uploaded successfully", "name", name, "uuid", uuid, "newOffset", newOffset)
 }
 
 // handleCompleteBlobUpload handles PUT /v2/{name}/blobs/uploads/{uuid}?digest={digest}
 func handleCompleteBlobUpload(w http.ResponseWriter, r *http.Request, service *DockerRegistryPrivateService) {
+	slog.Debug("PUT complete blob upload request", "method", r.Method, "path", r.URL.Path, "query", r.URL.RawQuery)
+
 	if r.Method != http.MethodPut {
+		slog.Warn("Method not allowed for PUT complete blob upload", "method", r.Method, "path", r.URL.Path)
 		docker.WriteError(w, docker.ErrUnsupported("method not allowed"))
 		return
 	}
 
 	name, uuid, err := parseBlobUploadPath(r.URL.Path)
 	if err != nil {
+		slog.Warn("Failed to parse blob upload path", "path", r.URL.Path, "error", err)
 		docker.WriteError(w, docker.ErrBlobUploadUnknown("invalid upload path"))
 		return
 	}

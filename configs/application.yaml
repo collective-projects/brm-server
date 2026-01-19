@@ -1,6 +1,6 @@
 # Logging configuration
 logging:
-  level: info  # debug, info, warn, error
+  level: debug  # debug, info, warn, error
 
 # Application metadata
 app:

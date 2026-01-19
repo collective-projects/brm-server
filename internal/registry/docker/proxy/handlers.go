@@ -12,26 +12,64 @@ import (
 
 // SetupRoutes configures HTTP routes for Docker registry API endpoints
 func SetupRoutes(mux *http.ServeMux, service *DockerRegistryProxyService) {
-	// API version check
-	mux.HandleFunc("GET /v2/", func(w http.ResponseWriter, r *http.Request) {
-		handleAPIVersion(w, r)
+	// Catch-all handler for /v2/ endpoints - we'll dispatch based on path and method
+	mux.HandleFunc("/v2/", func(w http.ResponseWriter, r *http.Request) {
+		dispatchRequest(w, r, service)
 	})
+}
 
-	// Manifest endpoints
-	mux.HandleFunc("GET /v2/{name}/manifests/{reference}", func(w http.ResponseWriter, r *http.Request) {
-		handleGetManifest(w, r, service)
-	})
-	mux.HandleFunc("HEAD /v2/{name}/manifests/{reference}", func(w http.ResponseWriter, r *http.Request) {
-		handleHeadManifest(w, r, service)
-	})
+// dispatchRequest routes requests to appropriate handlers based on path and method
+func dispatchRequest(w http.ResponseWriter, r *http.Request, service *DockerRegistryProxyService) {
+	path := r.URL.Path
+	method := r.Method
 
-	// Blob endpoints
-	mux.HandleFunc("GET /v2/{name}/blobs/{digest}", func(w http.ResponseWriter, r *http.Request) {
-		handleGetBlob(w, r, service)
-	})
-	mux.HandleFunc("HEAD /v2/{name}/blobs/{digest}", func(w http.ResponseWriter, r *http.Request) {
-		handleHeadBlob(w, r, service)
-	})
+	// API version check: GET /v2/
+	if path == "/v2/" || path == "/v2" {
+		if method == http.MethodGet {
+			handleAPIVersion(w, r)
+			return
+		}
+		docker.WriteError(w, docker.ErrUnsupported("method not allowed"))
+		return
+	}
+
+	// Remove /v2/ prefix for easier parsing
+	pathRest := strings.TrimPrefix(path, "/v2/")
+
+	// Match manifest endpoints: /v2/{name}/manifests/{reference}
+	if strings.Contains(pathRest, "/manifests/") {
+		parts := strings.Split(pathRest, "/manifests/")
+		if len(parts) == 2 && parts[0] != "" && parts[1] != "" {
+			switch method {
+			case http.MethodGet:
+				handleGetManifest(w, r, service)
+			case http.MethodHead:
+				handleHeadManifest(w, r, service)
+			default:
+				docker.WriteError(w, docker.ErrUnsupported("method not allowed"))
+			}
+			return
+		}
+	}
+
+	// Match blob endpoints: /v2/{name}/blobs/{digest}
+	if strings.Contains(pathRest, "/blobs/") {
+		parts := strings.Split(pathRest, "/blobs/")
+		if len(parts) == 2 && parts[0] != "" && parts[1] != "" {
+			switch method {
+			case http.MethodGet:
+				handleGetBlob(w, r, service)
+			case http.MethodHead:
+				handleHeadBlob(w, r, service)
+			default:
+				docker.WriteError(w, docker.ErrUnsupported("method not allowed"))
+			}
+			return
+		}
+	}
+
+	// No route matched
+	http.NotFound(w, r)
 }
 
 // handleAPIVersion handles GET /v2/ - API version check

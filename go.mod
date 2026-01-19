@@ -22,5 +22,5 @@ require (
 	golang.org/x/sys v0.37.0 // indirect
 )
 
-// We should not need this line, snce we are using a workspace and the brm-config module is in the workspace
+// We should not need this line, since we are using a workspace and the brm-config module is in the workspace
 replace github.com/collective-projects/brm-config => ../brm-config

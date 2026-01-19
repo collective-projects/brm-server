@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"sync"
 	"syscall"
 	"time"
@@ -25,11 +26,36 @@ func main() {
 
 	// Initialize logger with configured log level
 	logLevel := cfg.GetLogLevel(slog.LevelInfo)
-	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
-		Level: logLevel,
-	}))
 
-	logger.Info("Initializing BRM Server")
+	opts := &slog.HandlerOptions{
+		Level:     logLevel,
+		AddSource: true,
+		ReplaceAttr: func(groups []string, a slog.Attr) slog.Attr {
+			// If the key is 'source', we can modify how the file path is displayed
+			if a.Key == slog.SourceKey {
+				source := a.Value.Any().(*slog.Source)
+				// Logic to keep only the filename and last segment of the path
+				if source != nil {
+					dir, file := filepath.Split(source.File)
+					if dir != "" {
+						_, lastDir := filepath.Split(dir[:len(dir)-1]) // Remove trailing slash before Split
+						dir = filepath.Join(lastDir)
+						source.File = filepath.Join(dir, file)
+					} else {
+						source.File = file
+					}
+				}
+			}
+			return a
+		},
+	}
+
+	logger := slog.New(slog.NewTextHandler(os.Stdout, opts))
+
+	// Set as default logger so all slog.Debug/Info/Warn calls use this configured logger
+	slog.SetDefault(logger)
+
+	logger.Info("Initializing BRM Server", "logLevel", logLevel.String())
 
 	// Initialize storage
 	if err := initializeStorage(cfg, logger); err != nil {

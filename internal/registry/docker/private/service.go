@@ -7,6 +7,8 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
+	"log/slog"
+	"strings"
 	"sync"
 	"time"
 
@@ -18,6 +20,7 @@ import (
 type DockerRegistryPrivateService struct {
 	storage     models.ArtifactStorage
 	description string
+	logger      *slog.Logger
 
 	// Blob upload session management
 	uploadSessions map[string]*UploadSession
@@ -42,7 +45,10 @@ func NewDockerRegistryPrivateService(
 	service := &DockerRegistryPrivateService{
 		description:    description,
 		uploadSessions: make(map[string]*UploadSession),
+		logger:         slog.Default().With("component", "docker-registry-private", "description", description),
 	}
+
+	service.logger.Debug("Private Docker registry service created", "storageAlias", storageAlias)
 
 	// Start cleanup goroutine for expired sessions
 	go service.cleanupExpiredSessions()
@@ -73,13 +79,29 @@ func (s *DockerRegistryPrivateService) cleanupExpiredSessions() {
 }
 
 // getStorageKey generates a storage key for a manifest or blob (using digest for content-addressable storage)
+// Strips the algorithm prefix (e.g., "sha256:") to use just the hex hash for storage
 func (s *DockerRegistryPrivateService) getStorageKey(digest string) string {
+	// TODO: We are thrusting the client to provide the correct digest format.
+	//       This may be recorded, validated, or normalized in the future.
+	//       Also, can this be used as a vulnerability if the client provides unexpected/wrong digests/hashes?
+	// Docker digests are in format "algorithm:hexhash" (e.g., "sha256:abc123...")
+	// For storage, we only need the hex part
+	if idx := strings.Index(digest, ":"); idx >= 0 {
+		return digest[idx+1:]
+	}
 	return digest
 }
 
 // getManifestRefKey generates a key for manifest reference mapping
+// Uses a safe format without colons to avoid filesystem issues
 func (s *DockerRegistryPrivateService) getManifestRefKey(name, reference string) string {
-	return fmt.Sprintf("manifest-ref:%s:%s", name, reference)
+	//TODO: All blob/filenames will be hashes, which represent the file data, not the original names.
+	// 		Change this when we find a way to quickly access hashes from requested filenames.
+
+	// Replace colons and slashes with safe characters to avoid filesystem path issues
+	safeName := strings.ReplaceAll(strings.ReplaceAll(name, ":", "_"), "/", "_")
+	safeReference := strings.ReplaceAll(reference, ":", "_")
+	return fmt.Sprintf("manifest-ref_%s_%s", safeName, safeReference)
 }
 
 // calculateDigest calculates SHA256 digest
@@ -116,10 +138,14 @@ func (s *DockerRegistryPrivateService) validateDigest(reader io.Reader, expected
 
 // GetManifest retrieves a manifest by name and reference
 func (s *DockerRegistryPrivateService) GetManifest(ctx context.Context, name, reference string) ([]byte, string, error) {
+	s.logger.Debug("GetManifest called", "name", name, "reference", reference)
+
 	// First, look up the digest from the reference mapping
 	refKey := s.getManifestRefKey(name, reference)
+	s.logger.Debug("Looking up manifest reference", "refKey", refKey)
 	meta, err := s.storage.GetMeta(ctx, refKey)
 	if err != nil {
+		s.logger.Debug("Manifest reference not found", "refKey", refKey, "error", err)
 		return nil, "", fmt.Errorf("manifest reference not found: %w", err)
 	}
 
@@ -175,9 +201,12 @@ func (s *DockerRegistryPrivateService) GetManifest(ctx context.Context, name, re
 
 // CheckManifestExists checks if a manifest exists
 func (s *DockerRegistryPrivateService) CheckManifestExists(ctx context.Context, name, reference string) (bool, string, error) {
+	s.logger.Debug("CheckManifestExists called", "name", name, "reference", reference)
+
 	refKey := s.getManifestRefKey(name, reference)
 	meta, err := s.storage.GetMeta(ctx, refKey)
 	if err != nil {
+		s.logger.Debug("Manifest not found", "refKey", refKey, "error", err)
 		return false, "", nil // Not found, not an error
 	}
 
@@ -205,11 +234,14 @@ func (s *DockerRegistryPrivateService) CheckManifestExists(ctx context.Context, 
 
 // GetBlob retrieves a blob by digest
 func (s *DockerRegistryPrivateService) GetBlob(ctx context.Context, name, digest string) (io.ReadCloser, int64, error) {
+	s.logger.Debug("GetBlob called", "name", name, "digest", digest)
+
 	storageKey := s.getStorageKey(digest)
 
 	// Check if blob exists
 	meta, err := s.storage.GetMeta(ctx, storageKey)
 	if err != nil {
+		s.logger.Debug("Blob not found", "storageKey", storageKey, "error", err)
 		return nil, 0, fmt.Errorf("blob not found: %w", err)
 	}
 
@@ -232,19 +264,26 @@ func (s *DockerRegistryPrivateService) GetBlob(ctx context.Context, name, digest
 
 // CheckBlobExists checks if a blob exists
 func (s *DockerRegistryPrivateService) CheckBlobExists(ctx context.Context, name, digest string) (bool, int64, error) {
+	s.logger.Debug("CheckBlobExists called", "name", name, "digest", digest)
+
 	storageKey := s.getStorageKey(digest)
 	meta, err := s.storage.GetMeta(ctx, storageKey)
 	if err != nil {
+		s.logger.Debug("Blob not found", "storageKey", storageKey, "error", err)
 		return false, 0, nil // Not found, not an error
 	}
 
+	s.logger.Debug("Blob exists", "storageKey", storageKey, "size", meta.Length)
 	return true, meta.Length, nil
 }
 
 // PutManifest stores a manifest and creates a reference mapping
 func (s *DockerRegistryPrivateService) PutManifest(ctx context.Context, name, reference string, data []byte, mediaType string) error {
+	s.logger.Debug("PutManifest called", "name", name, "reference", reference, "mediaType", mediaType, "size", len(data))
+
 	// Calculate digest
 	digest := s.calculateDigest(data)
+	s.logger.Debug("Calculated manifest digest", "digest", digest)
 	storageKey := s.getStorageKey(digest)
 
 	// Store manifest (content-addressable by digest)
@@ -324,6 +363,8 @@ func (s *DockerRegistryPrivateService) PutManifest(ctx context.Context, name, re
 
 // StartBlobUpload creates a new blob upload session
 func (s *DockerRegistryPrivateService) StartBlobUpload(ctx context.Context, name string) (string, error) {
+	s.logger.Debug("StartBlobUpload called", "name", name)
+
 	// Generate UUID for session
 	uuid := fmt.Sprintf("%d-%d", time.Now().UnixNano(), len(s.uploadSessions))
 
@@ -339,6 +380,7 @@ func (s *DockerRegistryPrivateService) StartBlobUpload(ctx context.Context, name
 	s.uploadSessions[uuid] = session
 	s.sessionsMutex.Unlock()
 
+	s.logger.Debug("Blob upload session created", "uuid", uuid, "name", name)
 	return uuid, nil
 }
 
@@ -453,6 +495,8 @@ func (s *DockerRegistryPrivateService) CompleteBlobUpload(ctx context.Context, n
 
 // PutBlob uploads a blob directly in a single request with digest validation
 func (s *DockerRegistryPrivateService) PutBlob(ctx context.Context, name, digest string, reader io.Reader, size int64) error {
+	s.logger.Debug("PutBlob called", "name", name, "digest", digest, "size", size)
+
 	storageKey := s.getStorageKey(digest)
 
 	// Use io.TeeReader to validate digest while streaming to storage
