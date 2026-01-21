@@ -26,7 +26,7 @@ func TestStorageManagerCreate(t *testing.T) {
 		// Verify storage works
 		hash := "test123"
 		testData := []byte("test")
-		_, err = storage.Create(ctx, hash, bytes.NewReader(testData), int64(len(testData)), nil)
+		_, err = storage.CreateArtifact(ctx, hash, bytes.NewReader(testData), int64(len(testData)), nil)
 		if err != nil {
 			t.Fatalf("Storage operation failed: %v", err)
 		}
@@ -118,7 +118,7 @@ func TestStorageManagerConcurrentFileStorage(t *testing.T) {
 	hash := "test123"
 	testData := []byte("test data")
 
-	meta, err := storage.Create(ctx, hash, bytes.NewReader(testData), int64(len(testData)), nil)
+	meta, err := storage.CreateArtifact(ctx, hash, bytes.NewReader(testData), int64(len(testData)), nil)
 	if err != nil {
 		t.Fatalf("Create failed: %v", err)
 	}
@@ -148,7 +148,7 @@ func TestStorageManagerHashComputingFileStorage(t *testing.T) {
 	testData := []byte("test data")
 
 	// Create with unknown hash (empty string)
-	meta, err := storage.Create(ctx, "", bytes.NewReader(testData), int64(len(testData)), nil)
+	meta, err := storage.CreateArtifact(ctx, "", bytes.NewReader(testData), int64(len(testData)), nil)
 	if err != nil {
 		t.Fatalf("Create failed: %v", err)
 	}
@@ -172,7 +172,7 @@ func TestStorageManagerHashComputingFileStorage(t *testing.T) {
 			Length: -1,
 		},
 	}
-	rc, _, err := storage.Read(ctx, readReq)
+	rc, _, err := storage.ReadBlob(ctx, readReq)
 	if err != nil {
 		t.Fatalf("Read failed: %v", err)
 	}

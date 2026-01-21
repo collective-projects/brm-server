@@ -89,7 +89,7 @@ func (s *DockerRegistryProxyService) GetManifest(ctx context.Context, name, refe
 				Length: -1,
 			},
 		}
-		rc, _, err := s.storage.Read(ctx, readReq)
+		rc, _, err := s.storage.ReadBlob(ctx, readReq)
 		if err == nil {
 			defer rc.Close()
 			cachedData, err := io.ReadAll(rc)
@@ -112,7 +112,7 @@ func (s *DockerRegistryProxyService) GetManifest(ctx context.Context, name, refe
 		References:       []models.ArtifactReference{ref},
 	}
 
-	_, err = s.storage.Create(ctx, cacheKey, bytes.NewReader(manifestData), int64(len(manifestData)), meta)
+	_, err = s.storage.CreateArtifact(ctx, cacheKey, bytes.NewReader(manifestData), int64(len(manifestData)), meta)
 	if err != nil {
 		// Log error but continue - cache write failure shouldn't break the request
 	}
@@ -144,7 +144,7 @@ func (s *DockerRegistryProxyService) GetBlob(ctx context.Context, name, digest s
 				Length: -1,
 			},
 		}
-		rc, actualRange, err := s.storage.Read(ctx, readReq)
+		rc, actualRange, err := s.storage.ReadBlob(ctx, readReq)
 		if err == nil {
 			return rc, actualRange.Range.Length, nil
 		}
@@ -181,7 +181,7 @@ func (s *DockerRegistryProxyService) GetBlob(ctx context.Context, name, digest s
 	// Start goroutine to write to cache (non-blocking)
 	go func() {
 		defer cacheReader.Close()
-		_, err := s.storage.Create(ctx, cacheKey, cacheReader, size, meta)
+		_, err := s.storage.CreateArtifact(ctx, cacheKey, cacheReader, size, meta)
 		if err != nil {
 			cacheDone <- fmt.Errorf("failed to cache blob: %w", err)
 			return

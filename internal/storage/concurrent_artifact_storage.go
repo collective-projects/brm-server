@@ -53,9 +53,9 @@ func NewConcurrentArtifactStorage(
 	}, nil
 }
 
-// Alias returns the alias/name of the storage by delegating to the wrapped storage.
-func (c *ConcurrentArtifactStorage) Alias() string {
-	return c.storage.Alias()
+// GetStorageInfo returns information about the storage by delegating to the wrapped storage.
+func (c *ConcurrentArtifactStorage) GetStorageInfo() models.ArtifactStorageInfo {
+	return c.storage.GetStorageInfo()
 }
 
 // GetLockPath returns the lock file path for a given hash using git-like structure.
@@ -108,41 +108,41 @@ func (c *ConcurrentArtifactStorage) acquireLock(ctx context.Context, hash string
 	return fileLock, nil
 }
 
-// Create streams data from 'r' to storage with locking.
+// CreateArtifact streams data from 'r' to storage with locking.
 // Returns the final metadata state (merged if artifact existed, new if created).
-func (c *ConcurrentArtifactStorage) Create(ctx context.Context, hash string, r io.Reader, size int64, meta *models.ArtifactMeta) (*models.ArtifactMeta, error) {
+func (c *ConcurrentArtifactStorage) CreateArtifact(ctx context.Context, hash string, r io.Reader, size int64, meta *models.ArtifactMeta) (*models.ArtifactMeta, error) {
 	fileLock, err := c.acquireLock(ctx, hash)
 	if err != nil {
 		return nil, err
 	}
 	defer fileLock.Unlock()
 
-	return c.storage.Create(ctx, hash, r, size, meta)
+	return c.storage.CreateArtifact(ctx, hash, r, size, meta)
 }
 
-// Read returns a stream for the requested data.
-// Read operations don't require locking as they're read-only.
-func (c *ConcurrentArtifactStorage) Read(ctx context.Context, req models.ArtifactRange) (io.ReadCloser, models.ArtifactRange, error) {
-	return c.storage.Read(ctx, req)
+// ReadBlob returns a stream for the requested data.
+// ReadBlob operations don't require locking as they're read-only.
+func (c *ConcurrentArtifactStorage) ReadBlob(ctx context.Context, req models.ArtifactRange) (io.ReadCloser, models.ArtifactRange, error) {
+	return c.storage.ReadBlob(ctx, req)
 }
 
-// Update modifies a specific range by streaming data from 'r'.
-// Update operations don't require locking as they modify data, not metadata structure.
-func (c *ConcurrentArtifactStorage) Update(ctx context.Context, req models.ArtifactRange, r io.Reader) error {
-	return c.storage.Update(ctx, req, r)
+// UpdateBlob modifies a specific range by streaming data from 'r'.
+// UpdateBlob operations don't require locking as they modify data, not metadata structure.
+func (c *ConcurrentArtifactStorage) UpdateBlob(ctx context.Context, req models.ArtifactRange, r io.Reader) error {
+	return c.storage.UpdateBlob(ctx, req, r)
 }
 
-// Delete removes a specific reference to an artifact with locking.
+// DeleteArtifact removes a specific reference to an artifact with locking.
 // If no references remain, the artifact is moved to trash and nil is returned.
 // If references remain, only the metadata is updated and the updated metadata is returned.
-func (c *ConcurrentArtifactStorage) Delete(ctx context.Context, hash string, ref models.ArtifactReference) (*models.ArtifactMeta, error) {
+func (c *ConcurrentArtifactStorage) DeleteArtifact(ctx context.Context, hash string, ref models.ArtifactReference) (*models.ArtifactMeta, error) {
 	fileLock, err := c.acquireLock(ctx, hash)
 	if err != nil {
 		return nil, err
 	}
 	defer fileLock.Unlock()
 
-	return c.storage.Delete(ctx, hash, ref)
+	return c.storage.DeleteArtifact(ctx, hash, ref)
 }
 
 // GetMeta reads the metadata JSON file.

@@ -171,7 +171,7 @@ func (s *DockerRegistryPrivateService) GetManifest(ctx context.Context, name, re
 		},
 	}
 
-	rc, _, err := s.storage.Read(ctx, readReq)
+	rc, _, err := s.storage.ReadBlob(ctx, readReq)
 	if err != nil {
 		return nil, "", fmt.Errorf("failed to read manifest: %w", err)
 	}
@@ -254,7 +254,7 @@ func (s *DockerRegistryPrivateService) GetBlob(ctx context.Context, name, digest
 		},
 	}
 
-	rc, _, err := s.storage.Read(ctx, readReq)
+	rc, _, err := s.storage.ReadBlob(ctx, readReq)
 	if err != nil {
 		return nil, 0, fmt.Errorf("failed to read blob: %w", err)
 	}
@@ -300,7 +300,7 @@ func (s *DockerRegistryPrivateService) PutManifest(ctx context.Context, name, re
 	}
 
 	// Store manifest data
-	_, err := s.storage.Create(ctx, storageKey, bytes.NewReader(data), int64(len(data)), meta)
+	_, err := s.storage.CreateArtifact(ctx, storageKey, bytes.NewReader(data), int64(len(data)), meta)
 	if err != nil {
 		// If artifact exists (HashConflictError), merge references
 		if _, ok := err.(*models.HashConflictError); ok {
@@ -336,7 +336,7 @@ func (s *DockerRegistryPrivateService) PutManifest(ctx context.Context, name, re
 	}
 
 	// Use empty reader for reference mapping (no data, just metadata)
-	_, err = s.storage.Create(ctx, refKey, bytes.NewReader([]byte{}), 0, refMeta)
+	_, err = s.storage.CreateArtifact(ctx, refKey, bytes.NewReader([]byte{}), 0, refMeta)
 	if err != nil {
 		// If reference already exists, update it
 		existingRefMeta, getErr := s.storage.GetMeta(ctx, refKey)
@@ -516,7 +516,7 @@ func (s *DockerRegistryPrivateService) PutBlob(ctx context.Context, name, digest
 		References:       []models.ArtifactReference{ref},
 	}
 
-	_, err := s.storage.Create(ctx, storageKey, teeReader, size, meta)
+	_, err := s.storage.CreateArtifact(ctx, storageKey, teeReader, size, meta)
 	if err != nil {
 		// If artifact exists (HashConflictError), merge references
 		if _, ok := err.(*models.HashConflictError); ok {
@@ -544,7 +544,7 @@ func (s *DockerRegistryPrivateService) PutBlob(ctx context.Context, name, digest
 	if calculatedDigest != digest {
 		// Clean up: delete the artifact we just created
 		// Note: This is a best-effort cleanup
-		_, _ = s.storage.Delete(ctx, storageKey, ref)
+		_, _ = s.storage.DeleteArtifact(ctx, storageKey, ref)
 		return fmt.Errorf("digest mismatch: expected %s, got %s", digest, calculatedDigest)
 	}
 

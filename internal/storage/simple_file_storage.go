@@ -119,9 +119,9 @@ func (s *SimpleFileStorage) moveToTrash(ctx context.Context, hash string) error 
 	return nil
 }
 
-// Create stores the artifact and optional metadata.
+// CreateArtifact stores the artifact and optional metadata.
 // If artifact already exists, validates length and merges references without writing data.
-func (s *SimpleFileStorage) Create(ctx context.Context, hash string, r io.Reader, size int64, meta *models.ArtifactMeta) (*models.ArtifactMeta, error) {
+func (s *SimpleFileStorage) CreateArtifact(ctx context.Context, hash string, r io.Reader, size int64, meta *models.ArtifactMeta) (*models.ArtifactMeta, error) {
 	dir, artifactPath, metaPath := s.getPaths(hash)
 
 	// Check if artifact file already exists
@@ -245,8 +245,8 @@ func (s *SimpleFileStorage) Create(ctx context.Context, hash string, r io.Reader
 	return finalMeta, nil
 }
 
-// Read retrieves the artifact data using standard library SectionReader.
-func (s *SimpleFileStorage) Read(ctx context.Context, req models.ArtifactRange) (io.ReadCloser, models.ArtifactRange, error) {
+// ReadBlob retrieves the artifact data using standard library SectionReader.
+func (s *SimpleFileStorage) ReadBlob(ctx context.Context, req models.ArtifactRange) (io.ReadCloser, models.ArtifactRange, error) {
 	_, artifactPath, _ := s.getPaths(req.Hash)
 
 	// Open the file.
@@ -297,8 +297,8 @@ func (s *SimpleFileStorage) Read(ctx context.Context, req models.ArtifactRange) 
 	return rc, actualRange, nil
 }
 
-// Update modifies a range of the artifact.
-func (s *SimpleFileStorage) Update(ctx context.Context, req models.ArtifactRange, r io.Reader) error {
+// UpdateBlob modifies a range of the artifact.
+func (s *SimpleFileStorage) UpdateBlob(ctx context.Context, req models.ArtifactRange, r io.Reader) error {
 	_, artifactPath, _ := s.getPaths(req.Hash)
 
 	f, err := os.OpenFile(artifactPath, os.O_WRONLY, 0644)
@@ -320,10 +320,10 @@ func (s *SimpleFileStorage) Update(ctx context.Context, req models.ArtifactRange
 	return err
 }
 
-// Delete removes a specific reference to an artifact.
+// DeleteArtifact removes a specific reference to an artifact.
 // If no references remain, the artifact is moved to trash and nil is returned.
 // If references remain, only the metadata is updated and the updated metadata is returned.
-func (s *SimpleFileStorage) Delete(ctx context.Context, hash string, ref models.ArtifactReference) (*models.ArtifactMeta, error) {
+func (s *SimpleFileStorage) DeleteArtifact(ctx context.Context, hash string, ref models.ArtifactReference) (*models.ArtifactMeta, error) {
 	// Read existing metadata
 	existingMeta, err := s.GetMeta(ctx, hash)
 	if err != nil {

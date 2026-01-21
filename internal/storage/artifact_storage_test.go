@@ -99,7 +99,7 @@ func TestArtifactStorageConcurrent(t *testing.T) {
 			go func(id int) {
 				hash := fmt.Sprintf("concurrent-%03d", id)
 				testData := []byte("test data")
-				_, err := storage.Create(ctx, hash, bytes.NewReader(testData), int64(len(testData)), nil)
+				_, err := storage.CreateArtifact(ctx, hash, bytes.NewReader(testData), int64(len(testData)), nil)
 				done <- err
 			}(i)
 		}
@@ -114,7 +114,7 @@ func TestArtifactStorageConcurrent(t *testing.T) {
 	t.Run("concurrent_read", func(t *testing.T) {
 		hash := "concurrent-read"
 		testData := []byte("test data for concurrent read")
-		_, err := storage.Create(ctx, hash, bytes.NewReader(testData), int64(len(testData)), nil)
+		_, err := storage.CreateArtifact(ctx, hash, bytes.NewReader(testData), int64(len(testData)), nil)
 		if err != nil {
 			t.Fatalf("Setup failed: %v", err)
 		}
@@ -131,7 +131,7 @@ func TestArtifactStorageConcurrent(t *testing.T) {
 						Length: -1,
 					},
 				}
-				rc, _, err := storage.Read(ctx, req)
+				rc, _, err := storage.ReadBlob(ctx, req)
 				if err != nil {
 					done <- err
 					return
@@ -169,7 +169,7 @@ func TestArtifactStorageConcurrent(t *testing.T) {
 		for i, hash := range hashes {
 			go func(h string, id int) {
 				testData := []byte("test")
-				_, err := storage.Create(ctx, h, bytes.NewReader(testData), int64(len(testData)), nil)
+				_, err := storage.CreateArtifact(ctx, h, bytes.NewReader(testData), int64(len(testData)), nil)
 				createDone <- err
 			}(hash, i)
 		}
@@ -191,7 +191,7 @@ func TestArtifactStorageConcurrent(t *testing.T) {
 						Length: -1,
 					},
 				}
-				rc, _, err := storage.Read(ctx, req)
+				rc, _, err := storage.ReadBlob(ctx, req)
 				if err != nil {
 					readDone <- err
 					return

@@ -31,7 +31,7 @@ func newMockStorage() *mockStorage {
 	}
 }
 
-func (m *mockStorage) Create(ctx context.Context, hash string, r io.Reader, size int64, meta *models.ArtifactMeta) (*models.ArtifactMeta, error) {
+func (m *mockStorage) CreateArtifact(ctx context.Context, hash string, r io.Reader, size int64, meta *models.ArtifactMeta) (*models.ArtifactMeta, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -64,15 +64,15 @@ func (m *mockStorage) Create(ctx context.Context, hash string, r io.Reader, size
 	return createdMeta, nil
 }
 
-func (m *mockStorage) Read(ctx context.Context, req models.ArtifactRange) (io.ReadCloser, models.ArtifactRange, error) {
+func (m *mockStorage) ReadBlob(ctx context.Context, req models.ArtifactRange) (io.ReadCloser, models.ArtifactRange, error) {
 	return nil, models.ArtifactRange{}, fmt.Errorf("not implemented")
 }
 
-func (m *mockStorage) Update(ctx context.Context, req models.ArtifactRange, r io.Reader) error {
+func (m *mockStorage) UpdateBlob(ctx context.Context, req models.ArtifactRange, r io.Reader) error {
 	return fmt.Errorf("not implemented")
 }
 
-func (m *mockStorage) Delete(ctx context.Context, hash string, ref models.ArtifactReference) (*models.ArtifactMeta, error) {
+func (m *mockStorage) DeleteArtifact(ctx context.Context, hash string, ref models.ArtifactReference) (*models.ArtifactMeta, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -150,7 +150,7 @@ func TestConcurrentArtifactStorageDelegation(t *testing.T) {
 	}
 
 	// Test Create
-	createdMeta, err := wrapper.Create(ctx, hash, bytes.NewReader(testData), int64(len(testData)), meta)
+	createdMeta, err := wrapper.CreateArtifact(ctx, hash, bytes.NewReader(testData), int64(len(testData)), meta)
 	if err != nil {
 		t.Fatalf("Create failed: %v", err)
 	}
@@ -172,7 +172,7 @@ func TestConcurrentArtifactStorageDelegation(t *testing.T) {
 
 	// Test Delete
 	ref := createdMeta.References[0]
-	deletedMeta, err := wrapper.Delete(ctx, hash, ref)
+	deletedMeta, err := wrapper.DeleteArtifact(ctx, hash, ref)
 	if err != nil {
 		t.Fatalf("Delete failed: %v", err)
 	}
@@ -211,7 +211,7 @@ func TestConcurrentArtifactStorageConcurrentCreate(t *testing.T) {
 					{Name: fmt.Sprintf("ref%d", id), Repo: "repo1", ReferencedTimestamp: time.Now().Unix()},
 				},
 			}
-			_, err := wrapper.Create(ctx, hash, bytes.NewReader(testData), int64(len(testData)), meta)
+			_, err := wrapper.CreateArtifact(ctx, hash, bytes.NewReader(testData), int64(len(testData)), meta)
 			if err != nil {
 				errors <- err
 			}
@@ -265,7 +265,7 @@ func TestConcurrentArtifactStorageConcurrentDelete(t *testing.T) {
 		})
 	}
 
-	createdMeta, err := wrapper.Create(ctx, hash, bytes.NewReader(testData), int64(len(testData)), meta)
+	createdMeta, err := wrapper.CreateArtifact(ctx, hash, bytes.NewReader(testData), int64(len(testData)), meta)
 	if err != nil {
 		t.Fatalf("Create failed: %v", err)
 	}
@@ -281,7 +281,7 @@ func TestConcurrentArtifactStorageConcurrentDelete(t *testing.T) {
 		go func(id int) {
 			defer wg.Done()
 			ref := createdMeta.References[id]
-			_, err := wrapper.Delete(ctx, hash, ref)
+			_, err := wrapper.DeleteArtifact(ctx, hash, ref)
 			if err != nil {
 				errors <- err
 			} else {
@@ -362,7 +362,7 @@ func TestConcurrentArtifactStorageCreateDeleteRace(t *testing.T) {
 			{Name: "ref1", Repo: "repo1", ReferencedTimestamp: time.Now().Unix()},
 		},
 	}
-	createdMeta, err := wrapper.Create(ctx, hash, bytes.NewReader(testData), int64(len(testData)), meta)
+	createdMeta, err := wrapper.CreateArtifact(ctx, hash, bytes.NewReader(testData), int64(len(testData)), meta)
 	if err != nil {
 		t.Fatalf("Initial create failed: %v", err)
 	}
@@ -383,7 +383,7 @@ func TestConcurrentArtifactStorageCreateDeleteRace(t *testing.T) {
 				{Name: "ref2", Repo: "repo1", ReferencedTimestamp: time.Now().Unix()},
 			},
 		}
-		_, err := wrapper.Create(ctx, hash, bytes.NewReader(testData), int64(len(testData)), newMeta)
+		_, err := wrapper.CreateArtifact(ctx, hash, bytes.NewReader(testData), int64(len(testData)), newMeta)
 		if err != nil {
 			errors <- err
 		}
@@ -394,7 +394,7 @@ func TestConcurrentArtifactStorageCreateDeleteRace(t *testing.T) {
 	go func() {
 		defer wg.Done()
 		ref := createdMeta.References[0]
-		_, err := wrapper.Delete(ctx, hash, ref)
+		_, err := wrapper.DeleteArtifact(ctx, hash, ref)
 		if err != nil {
 			errors <- err
 		}
@@ -462,7 +462,7 @@ func TestConcurrentArtifactStorageLockTimeout(t *testing.T) {
 		References:       []models.ArtifactReference{},
 	}
 
-	_, err = wrapper.Create(lockCtx, hash, bytes.NewReader(testData), int64(len(testData)), meta)
+	_, err = wrapper.CreateArtifact(lockCtx, hash, bytes.NewReader(testData), int64(len(testData)), meta)
 	if err == nil {
 		t.Fatal("Expected timeout error, got nil")
 	}
@@ -492,7 +492,7 @@ func TestConcurrentArtifactStorageReadOperationsNoLock(t *testing.T) {
 		CreatedTimestamp: time.Now().Unix(),
 		References:       []models.ArtifactReference{},
 	}
-	_, err = wrapper.Create(ctx, hash, bytes.NewReader(testData), int64(len(testData)), meta)
+	_, err = wrapper.CreateArtifact(ctx, hash, bytes.NewReader(testData), int64(len(testData)), meta)
 	if err != nil {
 		t.Fatalf("Create failed: %v", err)
 	}

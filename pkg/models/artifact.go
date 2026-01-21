@@ -54,14 +54,21 @@ type ArtifactRange struct {
 	Range ByteRange `json:"range"`
 }
 
+// ArtifactStorageInfo contains information about a storage instance.
+type ArtifactStorageInfo struct {
+	Alias string `json:"alias"` // The alias/name of the storage
+}
+
 // BaseStorage provides common functionality for all storage implementations.
 type BaseStorage struct {
 	alias string
 }
 
-// Alias returns the alias/name of the storage.
-func (b *BaseStorage) Alias() string {
-	return b.alias
+// GetStorageInfo returns information about the storage instance.
+func (b *BaseStorage) GetStorageInfo() ArtifactStorageInfo {
+	return ArtifactStorageInfo{
+		Alias: b.alias,
+	}
 }
 
 // SetAlias sets the alias/name of the storage.
@@ -71,42 +78,43 @@ func (b *BaseStorage) SetAlias(alias string) {
 
 // ArtifactStorage is the high-performance interface.
 type ArtifactStorage interface {
-	// Create streams data from 'r' to storage.
+	// CreateArtifact streams data from 'r' to storage.
 	// We include 'size' because many storage backends (allocators/S3) need a size hint.
 	// If size is unknown, pass -1 (though this may disable some optimizations).
 	// The 'meta' parameter is optional (can be nil). If provided, metadata is stored atomically with the data.
 	// Returns the final metadata state (merged if artifact existed, new if created).
 	// If artifact exists, validates length match and merges references without writing data.
-	// Implementations are definitely expected to suport this method.
+	// Implementations are definitely expected to support this method.
 	// Implementations should handle their thread-safety internally, if they are declared as thread-safe.
-	Create(ctx context.Context, hash string, r io.Reader, size int64, meta *ArtifactMeta) (*ArtifactMeta, error)
+	CreateArtifact(ctx context.Context, hash string, r io.Reader, size int64, meta *ArtifactMeta) (*ArtifactMeta, error)
 
-	// Read returns a stream (rc) for the requested data.
+	// ReadBlob returns a stream (rc) for the requested data.
 	// It returns 'actual' containing the actual range being returned (calculated).
 	// This is useful if the requested Length was -1 or exceeded the file size.
 	// IMPORTANT: The caller MUST close rc.
 	// Implementations are definitely expected to suport this method.
-	Read(ctx context.Context, req ArtifactRange) (rc io.ReadCloser, actual ArtifactRange, err error)
+	ReadBlob(ctx context.Context, req ArtifactRange) (rc io.ReadCloser, actual ArtifactRange, err error)
 
-	// Update modifies a specific range by streaming data from 'r'.
+	// UpdateBlob modifies a specific range by streaming data from 'r'.
 	// Implementations may omit this method, if they are read-only.
-	Update(ctx context.Context, req ArtifactRange, r io.Reader) error
+	UpdateBlob(ctx context.Context, req ArtifactRange, r io.Reader) error
 
-	// Delete removes a specific reference to an artifact.
+	// DeleteArtifact removes a specific reference to an artifact.
 	// If no references remain, the artifact is moved to trash and nil is returned.
 	// If references remain, only the metadata is updated and the updated metadata is returned.
 	// Implementations are definitely expected to suport this method.
 	// Implementations should handle their thread-safety internally, if they are declared as thread-safe. Must be blocked if a Create operation is in progress.
-	Delete(ctx context.Context, hash string, ref ArtifactReference) (*ArtifactMeta, error)
+	DeleteArtifact(ctx context.Context, hash string, ref ArtifactReference) (*ArtifactMeta, error)
 
 	// Meta operations
 	// Implementations are definitely expected to suport this method.
 	GetMeta(ctx context.Context, hash string) (*ArtifactMeta, error)
 
+	// UpdateMeta updates the metadata for an artifact. Clients may need to store additional small info in metadata.
 	// Implementations are definitely expected to suport this method.
 	// Implementations should handle their thread-safety internally, if they are declared as thread-safe.
 	UpdateMeta(ctx context.Context, meta ArtifactMeta) (*ArtifactMeta, error)
 
-	// Alias returns the alias/name of the storage.
-	Alias() string
+	// GetStorageInfo returns information about the storage instance.
+	GetStorageInfo() ArtifactStorageInfo
 }

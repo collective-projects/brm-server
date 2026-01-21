@@ -22,7 +22,7 @@ func TestSimpleFileStorageFileSystemStructure(t *testing.T) {
 	hash := "abc123def456" // First two chars: "ab"
 	testData := []byte("test data")
 
-	_, err = storage.Create(ctx, hash, bytes.NewReader(testData), int64(len(testData)), nil)
+	_, err = storage.CreateArtifact(ctx, hash, bytes.NewReader(testData), int64(len(testData)), nil)
 	if err != nil {
 		t.Fatalf("Create failed: %v", err)
 	}
@@ -50,7 +50,7 @@ func TestSimpleFileStorageZeroPadding(t *testing.T) {
 	ctx := context.Background()
 	hash := "zeropad123"
 	initialData := []byte("Hello")
-	_, err = storage.Create(ctx, hash, bytes.NewReader(initialData), int64(len(initialData)), nil)
+	_, err = storage.CreateArtifact(ctx, hash, bytes.NewReader(initialData), int64(len(initialData)), nil)
 	if err != nil {
 		t.Fatalf("Setup failed: %v", err)
 	}
@@ -64,7 +64,7 @@ func TestSimpleFileStorageZeroPadding(t *testing.T) {
 			Length: int64(len(updateData)),
 		},
 	}
-	err = storage.Update(ctx, req, bytes.NewReader(updateData))
+	err = storage.UpdateBlob(ctx, req, bytes.NewReader(updateData))
 	if err != nil {
 		t.Fatalf("Update with padding failed: %v", err)
 	}
@@ -77,7 +77,7 @@ func TestSimpleFileStorageZeroPadding(t *testing.T) {
 			Length: -1,
 		},
 	}
-	rc, _, err := storage.Read(ctx, readReq)
+	rc, _, err := storage.ReadBlob(ctx, readReq)
 	if err != nil {
 		t.Fatalf("Read failed: %v", err)
 	}
@@ -125,7 +125,7 @@ func TestSimpleFileStorageMetadataFileExtension(t *testing.T) {
 		},
 	}
 
-	_, err = storage.Create(ctx, hash, bytes.NewReader(testData), int64(len(testData)), meta)
+	_, err = storage.CreateArtifact(ctx, hash, bytes.NewReader(testData), int64(len(testData)), meta)
 	if err != nil {
 		t.Fatalf("Create failed: %v", err)
 	}
@@ -160,7 +160,7 @@ func TestSimpleFileStorageMultipleReferences(t *testing.T) {
 		},
 	}
 
-	createdMeta, err := storage.Create(ctx, hash, bytes.NewReader(testData), int64(len(testData)), meta)
+	createdMeta, err := storage.CreateArtifact(ctx, hash, bytes.NewReader(testData), int64(len(testData)), meta)
 	if err != nil {
 		t.Fatalf("Create failed: %v", err)
 	}
@@ -202,7 +202,7 @@ func TestSimpleFileStorageReferenceMerging(t *testing.T) {
 		},
 	}
 
-	createdMeta1, err := storage.Create(ctx, hash, bytes.NewReader(testData), int64(len(testData)), meta1)
+	createdMeta1, err := storage.CreateArtifact(ctx, hash, bytes.NewReader(testData), int64(len(testData)), meta1)
 	if err != nil {
 		t.Fatalf("First Create failed: %v", err)
 	}
@@ -217,7 +217,7 @@ func TestSimpleFileStorageReferenceMerging(t *testing.T) {
 		},
 	}
 
-	createdMeta2, err := storage.Create(ctx, hash, bytes.NewReader(testData), int64(len(testData)), meta2)
+	createdMeta2, err := storage.CreateArtifact(ctx, hash, bytes.NewReader(testData), int64(len(testData)), meta2)
 	if err != nil {
 		t.Fatalf("Second Create failed: %v", err)
 	}
@@ -260,14 +260,14 @@ func TestSimpleFileStorageHashConflict(t *testing.T) {
 	testData1 := []byte("test data 1")
 
 	// Create artifact
-	_, err = storage.Create(ctx, hash, bytes.NewReader(testData1), int64(len(testData1)), nil)
+	_, err = storage.CreateArtifact(ctx, hash, bytes.NewReader(testData1), int64(len(testData1)), nil)
 	if err != nil {
 		t.Fatalf("First Create failed: %v", err)
 	}
 
 	// Try to create with different size (should fail)
 	testData2 := []byte("different size data")
-	_, err = storage.Create(ctx, hash, bytes.NewReader(testData2), int64(len(testData2)), nil)
+	_, err = storage.CreateArtifact(ctx, hash, bytes.NewReader(testData2), int64(len(testData2)), nil)
 	if err == nil {
 		t.Fatal("Expected hash conflict error")
 	}
@@ -312,14 +312,14 @@ func TestSimpleFileStorageDeleteWithMultipleReferences(t *testing.T) {
 		},
 	}
 
-	createdMeta, err := storage.Create(ctx, hash, bytes.NewReader(testData), int64(len(testData)), meta)
+	createdMeta, err := storage.CreateArtifact(ctx, hash, bytes.NewReader(testData), int64(len(testData)), meta)
 	if err != nil {
 		t.Fatalf("Create failed: %v", err)
 	}
 
 	// Delete one reference
 	refToDelete := createdMeta.References[0]
-	deletedMeta, err := storage.Delete(ctx, hash, refToDelete)
+	deletedMeta, err := storage.DeleteArtifact(ctx, hash, refToDelete)
 	if err != nil {
 		t.Fatalf("Delete failed: %v", err)
 	}
@@ -377,13 +377,13 @@ func TestSimpleFileStorageDeleteLastReference(t *testing.T) {
 		},
 	}
 
-	createdMeta, err := storage.Create(ctx, hash, bytes.NewReader(testData), int64(len(testData)), meta)
+	createdMeta, err := storage.CreateArtifact(ctx, hash, bytes.NewReader(testData), int64(len(testData)), meta)
 	if err != nil {
 		t.Fatalf("Create failed: %v", err)
 	}
 
 	// Delete the only reference
-	deletedMeta, err := storage.Delete(ctx, hash, createdMeta.References[0])
+	deletedMeta, err := storage.DeleteArtifact(ctx, hash, createdMeta.References[0])
 	if err != nil {
 		t.Fatalf("Delete failed: %v", err)
 	}
@@ -432,7 +432,7 @@ func TestSimpleFileStorageReferenceDeduplication(t *testing.T) {
 		},
 	}
 
-	_, err = storage.Create(ctx, hash, bytes.NewReader(testData), int64(len(testData)), meta1)
+	_, err = storage.CreateArtifact(ctx, hash, bytes.NewReader(testData), int64(len(testData)), meta1)
 	if err != nil {
 		t.Fatalf("First Create failed: %v", err)
 	}
@@ -447,7 +447,7 @@ func TestSimpleFileStorageReferenceDeduplication(t *testing.T) {
 		},
 	}
 
-	createdMeta2, err := storage.Create(ctx, hash, bytes.NewReader(testData), int64(len(testData)), meta2)
+	createdMeta2, err := storage.CreateArtifact(ctx, hash, bytes.NewReader(testData), int64(len(testData)), meta2)
 	if err != nil {
 		t.Fatalf("Second Create failed: %v", err)
 	}

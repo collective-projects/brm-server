@@ -37,9 +37,9 @@ func NewHashComputingArtifactStorage(storage models.ArtifactStorage) *HashComput
 	}
 }
 
-// Alias returns the alias/name of the storage by delegating to the wrapped storage.
-func (h *HashComputingArtifactStorage) Alias() string {
-	return h.storage.Alias()
+// GetStorageInfo returns information about the storage by delegating to the wrapped storage.
+func (h *HashComputingArtifactStorage) GetStorageInfo() models.ArtifactStorageInfo {
+	return h.storage.GetStorageInfo()
 }
 
 // isUnknownHash checks if the hash should be treated as unknown.
@@ -86,7 +86,7 @@ func (h *HashComputingArtifactStorage) cleanupTempHash(ctx context.Context, temp
 		Name: "temp-cleanup",
 		Repo: "temp-cleanup",
 	}
-	_, err = h.storage.Delete(ctx, tempHash, cleanupRef)
+	_, err = h.storage.DeleteArtifact(ctx, tempHash, cleanupRef)
 	return err
 }
 
@@ -117,7 +117,7 @@ func (h *HashComputingArtifactStorage) handleExistingHash(
 		if tempMeta != nil {
 			mergeSize = tempMeta.Length
 		}
-		return h.storage.Create(ctx, computedHash, bytes.NewReader(nil), mergeSize, meta)
+		return h.storage.CreateArtifact(ctx, computedHash, bytes.NewReader(nil), mergeSize, meta)
 	}
 
 	return existingMeta, nil
@@ -168,13 +168,13 @@ func (h *HashComputingArtifactStorage) moveToFinalHash(
 	return h.storage.GetMeta(ctx, computedHash)
 }
 
-// Create streams data from 'r' to storage.
+// CreateArtifact streams data from 'r' to storage.
 // If hash is unknown (empty, len<3, or "UNKNOWN"), computes SHA-256 hash automatically.
-func (h *HashComputingArtifactStorage) Create(ctx context.Context, hash string, r io.Reader, size int64, meta *models.ArtifactMeta) (*models.ArtifactMeta, error) {
+func (h *HashComputingArtifactStorage) CreateArtifact(ctx context.Context, hash string, r io.Reader, size int64, meta *models.ArtifactMeta) (*models.ArtifactMeta, error) {
 	// Check if hash is unknown
 	if !h.isUnknownHash(hash) {
 		// Known hash: delegate directly to underlying storage
-		return h.storage.Create(ctx, hash, r, size, meta)
+		return h.storage.CreateArtifact(ctx, hash, r, size, meta)
 	}
 
 	// Unknown hash: compute it using temp storage approach
@@ -187,7 +187,7 @@ func (h *HashComputingArtifactStorage) Create(ctx context.Context, hash string, 
 	teeReader := io.TeeReader(r, hasher)
 
 	// Create artifact with temp hash (this streams the data)
-	tempMeta, err := h.storage.Create(ctx, tempHash, teeReader, size, meta)
+	tempMeta, err := h.storage.CreateArtifact(ctx, tempHash, teeReader, size, meta)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create with temp hash: %w", err)
 	}
@@ -206,19 +206,19 @@ func (h *HashComputingArtifactStorage) Create(ctx context.Context, hash string, 
 	return h.moveToFinalHash(ctx, tempHash, computedHash, tempMeta, meta)
 }
 
-// Read returns a stream for the requested data.
-func (h *HashComputingArtifactStorage) Read(ctx context.Context, req models.ArtifactRange) (io.ReadCloser, models.ArtifactRange, error) {
-	return h.storage.Read(ctx, req)
+// ReadBlob returns a stream for the requested data.
+func (h *HashComputingArtifactStorage) ReadBlob(ctx context.Context, req models.ArtifactRange) (io.ReadCloser, models.ArtifactRange, error) {
+	return h.storage.ReadBlob(ctx, req)
 }
 
-// Update modifies a specific range by streaming data from 'r'.
-func (h *HashComputingArtifactStorage) Update(ctx context.Context, req models.ArtifactRange, r io.Reader) error {
-	return h.storage.Update(ctx, req, r)
+// UpdateBlob modifies a specific range by streaming data from 'r'.
+func (h *HashComputingArtifactStorage) UpdateBlob(ctx context.Context, req models.ArtifactRange, r io.Reader) error {
+	return h.storage.UpdateBlob(ctx, req, r)
 }
 
-// Delete removes a specific reference to an artifact.
-func (h *HashComputingArtifactStorage) Delete(ctx context.Context, hash string, ref models.ArtifactReference) (*models.ArtifactMeta, error) {
-	return h.storage.Delete(ctx, hash, ref)
+// DeleteArtifact removes a specific reference to an artifact.
+func (h *HashComputingArtifactStorage) DeleteArtifact(ctx context.Context, hash string, ref models.ArtifactReference) (*models.ArtifactMeta, error) {
+	return h.storage.DeleteArtifact(ctx, hash, ref)
 }
 
 // GetMeta reads the metadata JSON file.
