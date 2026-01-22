@@ -110,14 +110,28 @@ func (c *ConcurrentArtifactStorage) acquireLock(ctx context.Context, hash string
 
 // CreateArtifact streams data from 'r' to storage with locking.
 // Returns the final metadata state (merged if artifact existed, new if created).
-func (c *ConcurrentArtifactStorage) CreateArtifact(ctx context.Context, hash string, r io.Reader, size int64, meta *models.ArtifactMeta) (*models.ArtifactMeta, error) {
+func (c *ConcurrentArtifactStorage) CreateArtifact(ctx context.Context, id models.ArtifactIdentifier, r io.Reader, size int64, meta *models.ArtifactMeta) (*models.ArtifactMeta, error) {
+	// Resolve identifier to hash for locking
+	var hash string
+	if id.HasHash() {
+		hash = id.Hash
+	} else if id.HasReference() {
+		// For reference-based creates, use hash from meta if available
+		if meta != nil && meta.Hash != "" {
+			hash = meta.Hash
+		} else {
+			// Can't lock without hash, delegate to storage which will handle it
+			return c.storage.CreateArtifact(ctx, id, r, size, meta)
+		}
+	}
+
 	fileLock, err := c.acquireLock(ctx, hash)
 	if err != nil {
 		return nil, err
 	}
 	defer fileLock.Unlock()
 
-	return c.storage.CreateArtifact(ctx, hash, r, size, meta)
+	return c.storage.CreateArtifact(ctx, id, r, size, meta)
 }
 
 // ReadBlob returns a stream for the requested data.
@@ -133,22 +147,33 @@ func (c *ConcurrentArtifactStorage) UpdateBlob(ctx context.Context, req models.A
 }
 
 // DeleteArtifact removes a specific reference to an artifact with locking.
+// If id contains a reference, deletes that reference. If id only contains a hash, deletes all references.
 // If no references remain, the artifact is moved to trash and nil is returned.
 // If references remain, only the metadata is updated and the updated metadata is returned.
-func (c *ConcurrentArtifactStorage) DeleteArtifact(ctx context.Context, hash string, ref models.ArtifactReference) (*models.ArtifactMeta, error) {
+func (c *ConcurrentArtifactStorage) DeleteArtifact(ctx context.Context, id models.ArtifactIdentifier) (*models.ArtifactMeta, error) {
+	// Resolve identifier to hash for locking
+	var hash string
+	if id.HasHash() {
+		hash = id.Hash
+	} else if id.HasReference() {
+		// Need to resolve reference first to get hash
+		// For now, delegate to storage which will handle resolution
+		return c.storage.DeleteArtifact(ctx, id)
+	}
+
 	fileLock, err := c.acquireLock(ctx, hash)
 	if err != nil {
 		return nil, err
 	}
 	defer fileLock.Unlock()
 
-	return c.storage.DeleteArtifact(ctx, hash, ref)
+	return c.storage.DeleteArtifact(ctx, id)
 }
 
 // GetMeta reads the metadata JSON file.
 // Read operations don't require locking as they're read-only.
-func (c *ConcurrentArtifactStorage) GetMeta(ctx context.Context, hash string) (*models.ArtifactMeta, error) {
-	return c.storage.GetMeta(ctx, hash)
+func (c *ConcurrentArtifactStorage) GetMeta(ctx context.Context, id models.ArtifactIdentifier) (*models.ArtifactMeta, error) {
+	return c.storage.GetMeta(ctx, id)
 }
 
 // UpdateMeta overwrites the metadata JSON file with locking.

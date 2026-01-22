@@ -31,9 +31,12 @@ func newMockStorage() *mockStorage {
 	}
 }
 
-func (m *mockStorage) CreateArtifact(ctx context.Context, hash string, r io.Reader, size int64, meta *models.ArtifactMeta) (*models.ArtifactMeta, error) {
+func (m *mockStorage) CreateArtifact(ctx context.Context, id models.ArtifactIdentifier, r io.Reader, size int64, meta *models.ArtifactMeta) (*models.ArtifactMeta, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+
+	// Use Hash from identifier
+	hash := id.Hash
 
 	// Simulate reading data
 	if r != nil {
@@ -72,46 +75,56 @@ func (m *mockStorage) UpdateBlob(ctx context.Context, req models.ArtifactRange, 
 	return fmt.Errorf("not implemented")
 }
 
-func (m *mockStorage) DeleteArtifact(ctx context.Context, hash string, ref models.ArtifactReference) (*models.ArtifactMeta, error) {
+func (m *mockStorage) DeleteArtifact(ctx context.Context, id models.ArtifactIdentifier) (*models.ArtifactMeta, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
+	hash := id.Hash
 	meta, exists := m.creates[hash]
 	if !exists {
 		return nil, fmt.Errorf("artifact not found")
 	}
 
-	// Check if reference exists
-	found := false
-	newRefs := []models.ArtifactReference{}
-	for _, r := range meta.References {
-		if r.Name == ref.Name && r.Repo == ref.Repo {
-			found = true
-			// Skip this reference (remove it)
-		} else {
-			newRefs = append(newRefs, r)
+	// If reference is specified, delete only that reference
+	if id.HasReference() {
+		ref := *id.Reference
+		// Check if reference exists
+		found := false
+		newRefs := []models.ArtifactReference{}
+		for _, r := range meta.References {
+			if r.Name == ref.Name && r.Repo == ref.Repo {
+				found = true
+				// Skip this reference (remove it)
+			} else {
+				newRefs = append(newRefs, r)
+			}
 		}
+
+		if !found {
+			return nil, fmt.Errorf("reference with name %s and repo %s not found for artifact %s", ref.Name, ref.Repo, hash)
+		}
+
+		// Update references
+		meta.References = newRefs
+
+		if len(newRefs) == 0 {
+			delete(m.creates, hash)
+			return nil, nil
+		}
+
+		return meta, nil
 	}
 
-	if !found {
-		return nil, fmt.Errorf("reference with name %s and repo %s not found for artifact %s", ref.Name, ref.Repo, hash)
-	}
-
-	// Update references
-	meta.References = newRefs
-
-	if len(newRefs) == 0 {
-		delete(m.creates, hash)
-		return nil, nil
-	}
-
-	return meta, nil
+	// No reference specified - delete all
+	delete(m.creates, hash)
+	return nil, nil
 }
 
-func (m *mockStorage) GetMeta(ctx context.Context, hash string) (*models.ArtifactMeta, error) {
+func (m *mockStorage) GetMeta(ctx context.Context, id models.ArtifactIdentifier) (*models.ArtifactMeta, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
+	hash := id.Hash
 	meta, exists := m.creates[hash]
 	if !exists {
 		return nil, fmt.Errorf("not found")
@@ -150,7 +163,7 @@ func TestConcurrentArtifactStorageDelegation(t *testing.T) {
 	}
 
 	// Test Create
-	createdMeta, err := wrapper.CreateArtifact(ctx, hash, bytes.NewReader(testData), int64(len(testData)), meta)
+	createdMeta, err := wrapper.CreateArtifact(ctx, models.ArtifactIdentifier{Hash: hash}, bytes.NewReader(testData), int64(len(testData)), meta)
 	if err != nil {
 		t.Fatalf("Create failed: %v", err)
 	}
@@ -162,7 +175,7 @@ func TestConcurrentArtifactStorageDelegation(t *testing.T) {
 	}
 
 	// Test GetMeta
-	retrievedMeta, err := wrapper.GetMeta(ctx, hash)
+	retrievedMeta, err := wrapper.GetMeta(ctx, models.ArtifactIdentifier{Hash: hash})
 	if err != nil {
 		t.Fatalf("GetMeta failed: %v", err)
 	}
@@ -172,7 +185,7 @@ func TestConcurrentArtifactStorageDelegation(t *testing.T) {
 
 	// Test Delete
 	ref := createdMeta.References[0]
-	deletedMeta, err := wrapper.DeleteArtifact(ctx, hash, ref)
+	deletedMeta, err := wrapper.DeleteArtifact(ctx, models.ArtifactIdentifier{Hash: hash, Reference: &ref})
 	if err != nil {
 		t.Fatalf("Delete failed: %v", err)
 	}
@@ -211,7 +224,7 @@ func TestConcurrentArtifactStorageConcurrentCreate(t *testing.T) {
 					{Name: fmt.Sprintf("ref%d", id), Repo: "repo1", ReferencedTimestamp: time.Now().Unix()},
 				},
 			}
-			_, err := wrapper.CreateArtifact(ctx, hash, bytes.NewReader(testData), int64(len(testData)), meta)
+			_, err := wrapper.CreateArtifact(ctx, models.ArtifactIdentifier{Hash: hash}, bytes.NewReader(testData), int64(len(testData)), meta)
 			if err != nil {
 				errors <- err
 			}
@@ -227,7 +240,7 @@ func TestConcurrentArtifactStorageConcurrentCreate(t *testing.T) {
 	}
 
 	// Verify all references were merged
-	finalMeta, err := wrapper.GetMeta(ctx, hash)
+	finalMeta, err := wrapper.GetMeta(ctx, models.ArtifactIdentifier{Hash: hash})
 	if err != nil {
 		t.Fatalf("GetMeta failed: %v", err)
 	}
@@ -265,7 +278,7 @@ func TestConcurrentArtifactStorageConcurrentDelete(t *testing.T) {
 		})
 	}
 
-	createdMeta, err := wrapper.CreateArtifact(ctx, hash, bytes.NewReader(testData), int64(len(testData)), meta)
+	createdMeta, err := wrapper.CreateArtifact(ctx, models.ArtifactIdentifier{Hash: hash}, bytes.NewReader(testData), int64(len(testData)), meta)
 	if err != nil {
 		t.Fatalf("Create failed: %v", err)
 	}
@@ -281,7 +294,7 @@ func TestConcurrentArtifactStorageConcurrentDelete(t *testing.T) {
 		go func(id int) {
 			defer wg.Done()
 			ref := createdMeta.References[id]
-			_, err := wrapper.DeleteArtifact(ctx, hash, ref)
+			_, err := wrapper.DeleteArtifact(ctx, models.ArtifactIdentifier{Hash: hash, Reference: &ref})
 			if err != nil {
 				errors <- err
 			} else {
@@ -316,7 +329,7 @@ func TestConcurrentArtifactStorageConcurrentDelete(t *testing.T) {
 	}
 
 	// Verify final state is consistent (no corruption)
-	finalMeta, err := wrapper.GetMeta(ctx, hash)
+	finalMeta, err := wrapper.GetMeta(ctx, models.ArtifactIdentifier{Hash: hash})
 	if err != nil && err.Error() != "not found" {
 		t.Fatalf("GetMeta failed: %v", err)
 	}
@@ -362,7 +375,7 @@ func TestConcurrentArtifactStorageCreateDeleteRace(t *testing.T) {
 			{Name: "ref1", Repo: "repo1", ReferencedTimestamp: time.Now().Unix()},
 		},
 	}
-	createdMeta, err := wrapper.CreateArtifact(ctx, hash, bytes.NewReader(testData), int64(len(testData)), meta)
+	createdMeta, err := wrapper.CreateArtifact(ctx, models.ArtifactIdentifier{Hash: hash}, bytes.NewReader(testData), int64(len(testData)), meta)
 	if err != nil {
 		t.Fatalf("Initial create failed: %v", err)
 	}
@@ -383,7 +396,7 @@ func TestConcurrentArtifactStorageCreateDeleteRace(t *testing.T) {
 				{Name: "ref2", Repo: "repo1", ReferencedTimestamp: time.Now().Unix()},
 			},
 		}
-		_, err := wrapper.CreateArtifact(ctx, hash, bytes.NewReader(testData), int64(len(testData)), newMeta)
+		_, err := wrapper.CreateArtifact(ctx, models.ArtifactIdentifier{Hash: hash}, bytes.NewReader(testData), int64(len(testData)), newMeta)
 		if err != nil {
 			errors <- err
 		}
@@ -394,7 +407,7 @@ func TestConcurrentArtifactStorageCreateDeleteRace(t *testing.T) {
 	go func() {
 		defer wg.Done()
 		ref := createdMeta.References[0]
-		_, err := wrapper.DeleteArtifact(ctx, hash, ref)
+		_, err := wrapper.DeleteArtifact(ctx, models.ArtifactIdentifier{Hash: hash, Reference: &ref})
 		if err != nil {
 			errors <- err
 		}
@@ -409,7 +422,7 @@ func TestConcurrentArtifactStorageCreateDeleteRace(t *testing.T) {
 	}
 
 	// Verify final state is consistent
-	finalMeta, err := wrapper.GetMeta(ctx, hash)
+	finalMeta, err := wrapper.GetMeta(ctx, models.ArtifactIdentifier{Hash: hash})
 	if err != nil && err.Error() != "not found" {
 		t.Fatalf("GetMeta failed: %v", err)
 	}
@@ -462,7 +475,7 @@ func TestConcurrentArtifactStorageLockTimeout(t *testing.T) {
 		References:       []models.ArtifactReference{},
 	}
 
-	_, err = wrapper.CreateArtifact(lockCtx, hash, bytes.NewReader(testData), int64(len(testData)), meta)
+	_, err = wrapper.CreateArtifact(lockCtx, models.ArtifactIdentifier{Hash: hash}, bytes.NewReader(testData), int64(len(testData)), meta)
 	if err == nil {
 		t.Fatal("Expected timeout error, got nil")
 	}
@@ -492,7 +505,7 @@ func TestConcurrentArtifactStorageReadOperationsNoLock(t *testing.T) {
 		CreatedTimestamp: time.Now().Unix(),
 		References:       []models.ArtifactReference{},
 	}
-	_, err = wrapper.CreateArtifact(ctx, hash, bytes.NewReader(testData), int64(len(testData)), meta)
+	_, err = wrapper.CreateArtifact(ctx, models.ArtifactIdentifier{Hash: hash}, bytes.NewReader(testData), int64(len(testData)), meta)
 	if err != nil {
 		t.Fatalf("Create failed: %v", err)
 	}
@@ -506,7 +519,7 @@ func TestConcurrentArtifactStorageReadOperationsNoLock(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			_, err := wrapper.GetMeta(ctx, hash)
+			_, err := wrapper.GetMeta(ctx, models.ArtifactIdentifier{Hash: hash})
 			if err != nil {
 				errors <- err
 			}

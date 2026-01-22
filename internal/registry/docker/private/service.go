@@ -93,15 +93,14 @@ func (s *DockerRegistryPrivateService) getStorageKey(digest string) string {
 }
 
 // getManifestRefKey generates a key for manifest reference mapping
-// Uses a safe format without colons to avoid filesystem issues
+// Calculates SHA256 hash of the reference string for content-addressable storage
 func (s *DockerRegistryPrivateService) getManifestRefKey(name, reference string) string {
-	//TODO: All blob/filenames will be hashes, which represent the file data, not the original names.
-	// 		Change this when we find a way to quickly access hashes from requested filenames.
-
-	// Replace colons and slashes with safe characters to avoid filesystem path issues
-	safeName := strings.ReplaceAll(strings.ReplaceAll(name, ":", "_"), "/", "_")
-	safeReference := strings.ReplaceAll(reference, ":", "_")
-	return fmt.Sprintf("manifest-ref_%s_%s", safeName, safeReference)
+	// Create a deterministic key from name and reference
+	key := fmt.Sprintf("%s::%s", name, reference)
+	// Hash the key to get a proper storage hash
+	hasher := sha256.New()
+	hasher.Write([]byte(key))
+	return hex.EncodeToString(hasher.Sum(nil))
 }
 
 // calculateDigest calculates SHA256 digest
@@ -143,7 +142,7 @@ func (s *DockerRegistryPrivateService) GetManifest(ctx context.Context, name, re
 	// First, look up the digest from the reference mapping
 	refKey := s.getManifestRefKey(name, reference)
 	s.logger.Debug("Looking up manifest reference", "refKey", refKey)
-	meta, err := s.storage.GetMeta(ctx, refKey)
+	meta, err := s.storage.GetMeta(ctx, models.ArtifactIdentifier{Hash: refKey})
 	if err != nil {
 		s.logger.Debug("Manifest reference not found", "refKey", refKey, "error", err)
 		return nil, "", fmt.Errorf("manifest reference not found: %w", err)
@@ -164,7 +163,7 @@ func (s *DockerRegistryPrivateService) GetManifest(ctx context.Context, name, re
 	// Retrieve manifest by digest
 	storageKey := s.getStorageKey(digest)
 	readReq := models.ArtifactRange{
-		Hash: storageKey,
+		Identifier: models.ArtifactIdentifier{Hash: storageKey},
 		Range: models.ByteRange{
 			Offset: 0,
 			Length: -1,
@@ -204,7 +203,7 @@ func (s *DockerRegistryPrivateService) CheckManifestExists(ctx context.Context, 
 	s.logger.Debug("CheckManifestExists called", "name", name, "reference", reference)
 
 	refKey := s.getManifestRefKey(name, reference)
-	meta, err := s.storage.GetMeta(ctx, refKey)
+	meta, err := s.storage.GetMeta(ctx, models.ArtifactIdentifier{Hash: refKey})
 	if err != nil {
 		s.logger.Debug("Manifest not found", "refKey", refKey, "error", err)
 		return false, "", nil // Not found, not an error
@@ -224,7 +223,7 @@ func (s *DockerRegistryPrivateService) CheckManifestExists(ctx context.Context, 
 
 	// Verify the manifest actually exists
 	storageKey := s.getStorageKey(digest)
-	_, err = s.storage.GetMeta(ctx, storageKey)
+	_, err = s.storage.GetMeta(ctx, models.ArtifactIdentifier{Hash: storageKey})
 	if err != nil {
 		return false, "", nil
 	}
@@ -239,7 +238,7 @@ func (s *DockerRegistryPrivateService) GetBlob(ctx context.Context, name, digest
 	storageKey := s.getStorageKey(digest)
 
 	// Check if blob exists
-	meta, err := s.storage.GetMeta(ctx, storageKey)
+	meta, err := s.storage.GetMeta(ctx, models.ArtifactIdentifier{Hash: storageKey})
 	if err != nil {
 		s.logger.Debug("Blob not found", "storageKey", storageKey, "error", err)
 		return nil, 0, fmt.Errorf("blob not found: %w", err)
@@ -247,7 +246,7 @@ func (s *DockerRegistryPrivateService) GetBlob(ctx context.Context, name, digest
 
 	// Read blob
 	readReq := models.ArtifactRange{
-		Hash: storageKey,
+		Identifier: models.ArtifactIdentifier{Hash: storageKey},
 		Range: models.ByteRange{
 			Offset: 0,
 			Length: -1,
@@ -267,7 +266,7 @@ func (s *DockerRegistryPrivateService) CheckBlobExists(ctx context.Context, name
 	s.logger.Debug("CheckBlobExists called", "name", name, "digest", digest)
 
 	storageKey := s.getStorageKey(digest)
-	meta, err := s.storage.GetMeta(ctx, storageKey)
+	meta, err := s.storage.GetMeta(ctx, models.ArtifactIdentifier{Hash: storageKey})
 	if err != nil {
 		s.logger.Debug("Blob not found", "storageKey", storageKey, "error", err)
 		return false, 0, nil // Not found, not an error
@@ -300,11 +299,11 @@ func (s *DockerRegistryPrivateService) PutManifest(ctx context.Context, name, re
 	}
 
 	// Store manifest data
-	_, err := s.storage.CreateArtifact(ctx, storageKey, bytes.NewReader(data), int64(len(data)), meta)
+	_, err := s.storage.CreateArtifact(ctx, models.ArtifactIdentifier{Hash: storageKey}, bytes.NewReader(data), int64(len(data)), meta)
 	if err != nil {
 		// If artifact exists (HashConflictError), merge references
 		if _, ok := err.(*models.HashConflictError); ok {
-			existingMeta, getErr := s.storage.GetMeta(ctx, storageKey)
+			existingMeta, getErr := s.storage.GetMeta(ctx, models.ArtifactIdentifier{Hash: storageKey})
 			if getErr == nil {
 				// Merge references
 				existingMeta.References = append(existingMeta.References, ref)
@@ -321,9 +320,11 @@ func (s *DockerRegistryPrivateService) PutManifest(ctx context.Context, name, re
 	// Create reference mapping: name/reference -> digest
 	// Store the digest in the References field as a special reference
 	refKey := s.getManifestRefKey(name, reference)
+	// Store the digest in the reference mapping metadata
+	refData := []byte(digest) // Store digest as blob data
 	refMeta := &models.ArtifactMeta{
 		Hash:             refKey,
-		Length:           0,
+		Length:           int64(len(refData)),
 		CreatedTimestamp: time.Now().Unix(),
 		// Store digest in References as a special reference with Repo="digest"
 		References: []models.ArtifactReference{
@@ -335,11 +336,11 @@ func (s *DockerRegistryPrivateService) PutManifest(ctx context.Context, name, re
 		},
 	}
 
-	// Use empty reader for reference mapping (no data, just metadata)
-	_, err = s.storage.CreateArtifact(ctx, refKey, bytes.NewReader([]byte{}), 0, refMeta)
+	// Store reference mapping with digest as blob data
+	_, err = s.storage.CreateArtifact(ctx, models.ArtifactIdentifier{Hash: refKey}, bytes.NewReader(refData), int64(len(refData)), refMeta)
 	if err != nil {
 		// If reference already exists, update it
-		existingRefMeta, getErr := s.storage.GetMeta(ctx, refKey)
+		existingRefMeta, getErr := s.storage.GetMeta(ctx, models.ArtifactIdentifier{Hash: refKey})
 		if getErr == nil {
 			// Update digest in References
 			existingRefMeta.References = []models.ArtifactReference{
@@ -516,11 +517,11 @@ func (s *DockerRegistryPrivateService) PutBlob(ctx context.Context, name, digest
 		References:       []models.ArtifactReference{ref},
 	}
 
-	_, err := s.storage.CreateArtifact(ctx, storageKey, teeReader, size, meta)
+	_, err := s.storage.CreateArtifact(ctx, models.ArtifactIdentifier{Hash: storageKey}, teeReader, size, meta)
 	if err != nil {
 		// If artifact exists (HashConflictError), merge references
 		if _, ok := err.(*models.HashConflictError); ok {
-			existingMeta, getErr := s.storage.GetMeta(ctx, storageKey)
+			existingMeta, getErr := s.storage.GetMeta(ctx, models.ArtifactIdentifier{Hash: storageKey})
 			if getErr == nil {
 				// Merge references
 				existingMeta.References = append(existingMeta.References, ref)
@@ -544,7 +545,7 @@ func (s *DockerRegistryPrivateService) PutBlob(ctx context.Context, name, digest
 	if calculatedDigest != digest {
 		// Clean up: delete the artifact we just created
 		// Note: This is a best-effort cleanup
-		_, _ = s.storage.DeleteArtifact(ctx, storageKey, ref)
+		_, _ = s.storage.DeleteArtifact(ctx, models.ArtifactIdentifier{Hash: storageKey, Reference: &ref})
 		return fmt.Errorf("digest mismatch: expected %s, got %s", digest, calculatedDigest)
 	}
 

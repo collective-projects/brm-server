@@ -72,7 +72,7 @@ func testArtifactStorageCreate(t *testing.T, storage models.ArtifactStorage) {
 		testData := []byte("Hello, World!")
 		r := bytes.NewReader(testData)
 
-		meta, err := storage.CreateArtifact(ctx, hash, r, int64(len(testData)), nil)
+		meta, err := storage.CreateArtifact(ctx, models.ArtifactIdentifier{Hash: hash}, r, int64(len(testData)), nil)
 		if err != nil {
 			t.Fatalf("Create failed: %v", err)
 		}
@@ -85,7 +85,7 @@ func testArtifactStorageCreate(t *testing.T, storage models.ArtifactStorage) {
 
 		// Verify data can be read back
 		req := models.ArtifactRange{
-			Hash: hash,
+			Identifier: models.ArtifactIdentifier{Hash: hash},
 			Range: models.ByteRange{
 				Offset: 0,
 				Length: -1,
@@ -111,7 +111,7 @@ func testArtifactStorageCreate(t *testing.T, storage models.ArtifactStorage) {
 		meta := createTestMeta(hash, "test-artifact", "docker:hub.docker.com", int64(len(testData)))
 		r := bytes.NewReader(testData)
 
-		createdMeta, err := storage.CreateArtifact(ctx, hash, r, int64(len(testData)), meta)
+		createdMeta, err := storage.CreateArtifact(ctx, models.ArtifactIdentifier{Hash: hash}, r, int64(len(testData)), meta)
 		if err != nil {
 			t.Fatalf("Create failed: %v", err)
 		}
@@ -120,7 +120,7 @@ func testArtifactStorageCreate(t *testing.T, storage models.ArtifactStorage) {
 		}
 
 		// Verify metadata
-		retrievedMeta, err := storage.GetMeta(ctx, hash)
+		retrievedMeta, err := storage.GetMeta(ctx, models.ArtifactIdentifier{Hash: hash})
 		if err != nil {
 			t.Fatalf("GetMeta failed: %v", err)
 		}
@@ -148,7 +148,7 @@ func testArtifactStorageCreate(t *testing.T, storage models.ArtifactStorage) {
 		testData := []byte{}
 		r := bytes.NewReader(testData)
 
-		meta, err := storage.CreateArtifact(ctx, hash, r, 0, nil)
+		meta, err := storage.CreateArtifact(ctx, models.ArtifactIdentifier{Hash: hash}, r, 0, nil)
 		if err != nil {
 			t.Fatalf("Create failed with empty data: %v", err)
 		}
@@ -158,7 +158,7 @@ func testArtifactStorageCreate(t *testing.T, storage models.ArtifactStorage) {
 
 		// Verify empty data can be read
 		req := models.ArtifactRange{
-			Hash: hash,
+			Identifier: models.ArtifactIdentifier{Hash: hash},
 			Range: models.ByteRange{
 				Offset: 0,
 				Length: -1,
@@ -184,7 +184,7 @@ func testArtifactStorageCreate(t *testing.T, storage models.ArtifactStorage) {
 		testData := createTestData(1024 * 1024) // 1MB
 		r := bytes.NewReader(testData)
 
-		meta, err := storage.CreateArtifact(ctx, hash, r, int64(len(testData)), nil)
+		meta, err := storage.CreateArtifact(ctx, models.ArtifactIdentifier{Hash: hash}, r, int64(len(testData)), nil)
 		if err != nil {
 			t.Fatalf("Create failed with large data: %v", err)
 		}
@@ -194,7 +194,7 @@ func testArtifactStorageCreate(t *testing.T, storage models.ArtifactStorage) {
 
 		// Verify large data can be read back
 		req := models.ArtifactRange{
-			Hash: hash,
+			Identifier: models.ArtifactIdentifier{Hash: hash},
 			Range: models.ByteRange{
 				Offset: 0,
 				Length: -1,
@@ -223,14 +223,14 @@ func testArtifactStorageRead(t *testing.T, storage models.ArtifactStorage) {
 	// Setup: create test artifact
 	hash := "readtest123"
 	testData := []byte("0123456789ABCDEF")
-	_, err := storage.CreateArtifact(ctx, hash, bytes.NewReader(testData), int64(len(testData)), nil)
+	_, err := storage.CreateArtifact(ctx, models.ArtifactIdentifier{Hash: hash}, bytes.NewReader(testData), int64(len(testData)), nil)
 	if err != nil {
 		t.Fatalf("Setup failed: %v", err)
 	}
 
 	t.Run("read_full_artifact", func(t *testing.T) {
 		req := models.ArtifactRange{
-			Hash: hash,
+			Identifier: models.ArtifactIdentifier{Hash: hash},
 			Range: models.ByteRange{
 				Offset: 0,
 				Length: -1,
@@ -255,7 +255,7 @@ func testArtifactStorageRead(t *testing.T, storage models.ArtifactStorage) {
 
 	t.Run("read_partial_from_start", func(t *testing.T) {
 		req := models.ArtifactRange{
-			Hash: hash,
+			Identifier: models.ArtifactIdentifier{Hash: hash},
 			Range: models.ByteRange{
 				Offset: 0,
 				Length: 5,
@@ -281,7 +281,7 @@ func testArtifactStorageRead(t *testing.T, storage models.ArtifactStorage) {
 
 	t.Run("read_partial_from_middle", func(t *testing.T) {
 		req := models.ArtifactRange{
-			Hash: hash,
+			Identifier: models.ArtifactIdentifier{Hash: hash},
 			Range: models.ByteRange{
 				Offset: 5,
 				Length: 5,
@@ -307,7 +307,7 @@ func testArtifactStorageRead(t *testing.T, storage models.ArtifactStorage) {
 
 	t.Run("read_partial_from_end", func(t *testing.T) {
 		req := models.ArtifactRange{
-			Hash: hash,
+			Identifier: models.ArtifactIdentifier{Hash: hash},
 			Range: models.ByteRange{
 				Offset: 12,
 				Length: -1,
@@ -333,7 +333,7 @@ func testArtifactStorageRead(t *testing.T, storage models.ArtifactStorage) {
 
 	t.Run("read_range_exceeds_file_size", func(t *testing.T) {
 		req := models.ArtifactRange{
-			Hash: hash,
+			Identifier: models.ArtifactIdentifier{Hash: hash},
 			Range: models.ByteRange{
 				Offset: 0,
 				Length: 1000, // Much larger than file size
@@ -355,7 +355,7 @@ func testArtifactStorageRead(t *testing.T, storage models.ArtifactStorage) {
 
 	t.Run("read_offset_beyond_file_size", func(t *testing.T) {
 		req := models.ArtifactRange{
-			Hash: hash,
+			Identifier: models.ArtifactIdentifier{Hash: hash},
 			Range: models.ByteRange{
 				Offset: 1000,
 				Length: 10,
@@ -378,7 +378,7 @@ func testArtifactStorageRead(t *testing.T, storage models.ArtifactStorage) {
 
 	t.Run("read_nonexistent_artifact", func(t *testing.T) {
 		req := models.ArtifactRange{
-			Hash: "nonexistent",
+			Identifier: models.ArtifactIdentifier{Hash: "nonexistent"},
 			Range: models.ByteRange{
 				Offset: 0,
 				Length: -1,
@@ -398,7 +398,7 @@ func testArtifactStorageUpdate(t *testing.T, storage models.ArtifactStorage) {
 	t.Run("update_existing_range", func(t *testing.T) {
 		hash := "updatetest1"
 		initialData := []byte("0123456789")
-		_, err := storage.CreateArtifact(ctx, hash, bytes.NewReader(initialData), int64(len(initialData)), nil)
+		_, err := storage.CreateArtifact(ctx, models.ArtifactIdentifier{Hash: hash}, bytes.NewReader(initialData), int64(len(initialData)), nil)
 		if err != nil {
 			t.Fatalf("Setup failed: %v", err)
 		}
@@ -406,7 +406,7 @@ func testArtifactStorageUpdate(t *testing.T, storage models.ArtifactStorage) {
 		// Update bytes 2-5
 		updateData := []byte("ABC")
 		req := models.ArtifactRange{
-			Hash: hash,
+			Identifier: models.ArtifactIdentifier{Hash: hash},
 			Range: models.ByteRange{
 				Offset: 2,
 				Length: 3,
@@ -419,7 +419,7 @@ func testArtifactStorageUpdate(t *testing.T, storage models.ArtifactStorage) {
 
 		// Verify update
 		readReq := models.ArtifactRange{
-			Hash: hash,
+			Identifier: models.ArtifactIdentifier{Hash: hash},
 			Range: models.ByteRange{
 				Offset: 0,
 				Length: -1,
@@ -439,7 +439,7 @@ func testArtifactStorageUpdate(t *testing.T, storage models.ArtifactStorage) {
 	t.Run("update_with_append", func(t *testing.T) {
 		hash := "updatetest2"
 		initialData := []byte("Hello")
-		_, err := storage.CreateArtifact(ctx, hash, bytes.NewReader(initialData), int64(len(initialData)), nil)
+		_, err := storage.CreateArtifact(ctx, models.ArtifactIdentifier{Hash: hash}, bytes.NewReader(initialData), int64(len(initialData)), nil)
 		if err != nil {
 			t.Fatalf("Setup failed: %v", err)
 		}
@@ -447,7 +447,7 @@ func testArtifactStorageUpdate(t *testing.T, storage models.ArtifactStorage) {
 		// Append data
 		appendData := []byte(", World!")
 		req := models.ArtifactRange{
-			Hash: hash,
+			Identifier: models.ArtifactIdentifier{Hash: hash},
 			Range: models.ByteRange{
 				Offset: int64(len(initialData)),
 				Length: -1,
@@ -460,7 +460,7 @@ func testArtifactStorageUpdate(t *testing.T, storage models.ArtifactStorage) {
 
 		// Verify append
 		readReq := models.ArtifactRange{
-			Hash: hash,
+			Identifier: models.ArtifactIdentifier{Hash: hash},
 			Range: models.ByteRange{
 				Offset: 0,
 				Length: -1,
@@ -480,7 +480,7 @@ func testArtifactStorageUpdate(t *testing.T, storage models.ArtifactStorage) {
 	t.Run("update_with_specific_length", func(t *testing.T) {
 		hash := "updatetest3"
 		initialData := []byte("0123456789")
-		_, err := storage.CreateArtifact(ctx, hash, bytes.NewReader(initialData), int64(len(initialData)), nil)
+		_, err := storage.CreateArtifact(ctx, models.ArtifactIdentifier{Hash: hash}, bytes.NewReader(initialData), int64(len(initialData)), nil)
 		if err != nil {
 			t.Fatalf("Setup failed: %v", err)
 		}
@@ -488,7 +488,7 @@ func testArtifactStorageUpdate(t *testing.T, storage models.ArtifactStorage) {
 		// Update with specific length (shorter than source)
 		updateData := []byte("ABCDEFGHIJ")
 		req := models.ArtifactRange{
-			Hash: hash,
+			Identifier: models.ArtifactIdentifier{Hash: hash},
 			Range: models.ByteRange{
 				Offset: 2,
 				Length: 4, // Only write 4 bytes
@@ -501,7 +501,7 @@ func testArtifactStorageUpdate(t *testing.T, storage models.ArtifactStorage) {
 
 		// Verify update
 		readReq := models.ArtifactRange{
-			Hash: hash,
+			Identifier: models.ArtifactIdentifier{Hash: hash},
 			Range: models.ByteRange{
 				Offset: 0,
 				Length: -1,
@@ -526,7 +526,7 @@ func testArtifactStorageDelete(t *testing.T, storage models.ArtifactStorage) {
 	t.Run("delete_existing_artifact", func(t *testing.T) {
 		hash := "deletetest1"
 		testData := []byte("test data")
-		meta, err := storage.CreateArtifact(ctx, hash, bytes.NewReader(testData), int64(len(testData)), nil)
+		meta, err := storage.CreateArtifact(ctx, models.ArtifactIdentifier{Hash: hash}, bytes.NewReader(testData), int64(len(testData)), nil)
 		if err != nil {
 			t.Fatalf("Setup failed: %v", err)
 		}
@@ -549,7 +549,7 @@ func testArtifactStorageDelete(t *testing.T, storage models.ArtifactStorage) {
 			}
 		}
 
-		deletedMeta, err := storage.DeleteArtifact(ctx, hash, ref)
+		deletedMeta, err := storage.DeleteArtifact(ctx, models.ArtifactIdentifier{Hash: hash, Reference: &ref})
 		if err != nil {
 			t.Fatalf("Delete failed: %v", err)
 		}
@@ -560,7 +560,7 @@ func testArtifactStorageDelete(t *testing.T, storage models.ArtifactStorage) {
 
 		// Verify deletion
 		req := models.ArtifactRange{
-			Hash: hash,
+			Identifier: models.ArtifactIdentifier{Hash: hash},
 			Range: models.ByteRange{
 				Offset: 0,
 				Length: -1,
@@ -578,7 +578,7 @@ func testArtifactStorageDelete(t *testing.T, storage models.ArtifactStorage) {
 			Repo:                "test",
 			ReferencedTimestamp: time.Now().Unix(),
 		}
-		_, err := storage.DeleteArtifact(ctx, "nonexistent", ref)
+		_, err := storage.DeleteArtifact(ctx, models.ArtifactIdentifier{Hash: "nonexistent", Reference: &ref})
 		if err == nil {
 			t.Error("Delete should error for nonexistent artifact")
 		}
@@ -588,7 +588,7 @@ func testArtifactStorageDelete(t *testing.T, storage models.ArtifactStorage) {
 		hash := "deletetest2"
 		testData := []byte("test data")
 		meta := createTestMeta(hash, "test", "docker:test", int64(len(testData)))
-		createdMeta, err := storage.CreateArtifact(ctx, hash, bytes.NewReader(testData), int64(len(testData)), meta)
+		createdMeta, err := storage.CreateArtifact(ctx, models.ArtifactIdentifier{Hash: hash}, bytes.NewReader(testData), int64(len(testData)), meta)
 		if err != nil {
 			t.Fatalf("Setup failed: %v", err)
 		}
@@ -598,7 +598,7 @@ func testArtifactStorageDelete(t *testing.T, storage models.ArtifactStorage) {
 		}
 		ref := createdMeta.References[0]
 
-		deletedMeta, err := storage.DeleteArtifact(ctx, hash, ref)
+		deletedMeta, err := storage.DeleteArtifact(ctx, models.ArtifactIdentifier{Hash: hash, Reference: &ref})
 		if err != nil {
 			t.Fatalf("Delete failed: %v", err)
 		}
@@ -608,7 +608,7 @@ func testArtifactStorageDelete(t *testing.T, storage models.ArtifactStorage) {
 		}
 
 		// Verify metadata is also deleted
-		_, err = storage.GetMeta(ctx, hash)
+		_, err = storage.GetMeta(ctx, models.ArtifactIdentifier{Hash: hash})
 		if err == nil {
 			t.Error("Expected error when reading deleted metadata")
 		}
@@ -623,12 +623,12 @@ func testArtifactStorageGetMeta(t *testing.T, storage models.ArtifactStorage) {
 		hash := "metatest1"
 		testData := []byte("test")
 		meta := createTestMeta(hash, "test-artifact", "docker:hub.docker.com", int64(len(testData)))
-		_, err := storage.CreateArtifact(ctx, hash, bytes.NewReader(testData), int64(len(testData)), meta)
+		_, err := storage.CreateArtifact(ctx, models.ArtifactIdentifier{Hash: hash}, bytes.NewReader(testData), int64(len(testData)), meta)
 		if err != nil {
 			t.Fatalf("Setup failed: %v", err)
 		}
 
-		retrievedMeta, err := storage.GetMeta(ctx, hash)
+		retrievedMeta, err := storage.GetMeta(ctx, models.ArtifactIdentifier{Hash: hash})
 		if err != nil {
 			t.Fatalf("GetMeta failed: %v", err)
 		}
@@ -652,7 +652,7 @@ func testArtifactStorageGetMeta(t *testing.T, storage models.ArtifactStorage) {
 	})
 
 	t.Run("get_nonexistent_metadata", func(t *testing.T) {
-		_, err := storage.GetMeta(ctx, "nonexistent")
+		_, err := storage.GetMeta(ctx, models.ArtifactIdentifier{Hash: "nonexistent"})
 		if err == nil {
 			t.Error("Expected error for nonexistent metadata")
 		}
@@ -667,7 +667,7 @@ func testArtifactStorageUpdateMeta(t *testing.T, storage models.ArtifactStorage)
 		hash := "metatest2"
 		testData := []byte("test")
 		initialMeta := createTestMeta(hash, "initial", "docker:test", int64(len(testData)))
-		_, err := storage.CreateArtifact(ctx, hash, bytes.NewReader(testData), int64(len(testData)), initialMeta)
+		_, err := storage.CreateArtifact(ctx, models.ArtifactIdentifier{Hash: hash}, bytes.NewReader(testData), int64(len(testData)), initialMeta)
 		if err != nil {
 			t.Fatalf("Setup failed: %v", err)
 		}
@@ -707,7 +707,7 @@ func testArtifactStorageUpdateMeta(t *testing.T, storage models.ArtifactStorage)
 		hash := "metatest3"
 		testData := []byte("test")
 		// Create artifact without metadata
-		_, err := storage.CreateArtifact(ctx, hash, bytes.NewReader(testData), int64(len(testData)), nil)
+		_, err := storage.CreateArtifact(ctx, models.ArtifactIdentifier{Hash: hash}, bytes.NewReader(testData), int64(len(testData)), nil)
 		if err != nil {
 			t.Fatalf("Setup failed: %v", err)
 		}
@@ -750,7 +750,7 @@ func testArtifactStorageFullWorkflow(t *testing.T, storage models.ArtifactStorag
 	meta := createTestMeta(hash, "workflow-artifact", "docker:test", int64(len(testData)))
 
 	// 1. Create artifact with metadata
-	createdMeta, err := storage.CreateArtifact(ctx, hash, bytes.NewReader(testData), int64(len(testData)), meta)
+	createdMeta, err := storage.CreateArtifact(ctx, models.ArtifactIdentifier{Hash: hash}, bytes.NewReader(testData), int64(len(testData)), meta)
 	if err != nil {
 		t.Fatalf("Create failed: %v", err)
 	}
@@ -760,7 +760,7 @@ func testArtifactStorageFullWorkflow(t *testing.T, storage models.ArtifactStorag
 
 	// 2. Read full artifact
 	req := models.ArtifactRange{
-		Hash: hash,
+		Identifier: models.ArtifactIdentifier{Hash: hash},
 		Range: models.ByteRange{
 			Offset: 0,
 			Length: -1,
@@ -775,7 +775,7 @@ func testArtifactStorageFullWorkflow(t *testing.T, storage models.ArtifactStorag
 
 	// 3. Read partial range
 	partialReq := models.ArtifactRange{
-		Hash: hash,
+		Identifier: models.ArtifactIdentifier{Hash: hash},
 		Range: models.ByteRange{
 			Offset: 0,
 			Length: 7,
@@ -792,7 +792,7 @@ func testArtifactStorageFullWorkflow(t *testing.T, storage models.ArtifactStorag
 	// 4. Update artifact range (overwrite first part)
 	updateData := []byte("Updated")
 	updateReq := models.ArtifactRange{
-		Hash: hash,
+		Identifier: models.ArtifactIdentifier{Hash: hash},
 		Range: models.ByteRange{
 			Offset: 0,
 			Length: int64(len(updateData)),
@@ -835,7 +835,7 @@ func testArtifactStorageFullWorkflow(t *testing.T, storage models.ArtifactStorag
 	verifyData(t, updatedReadData, expectedUpdated)
 
 	// 7. Verify updated metadata
-	retrievedMeta, err := storage.GetMeta(ctx, hash)
+	retrievedMeta, err := storage.GetMeta(ctx, models.ArtifactIdentifier{Hash: hash})
 	if err != nil {
 		t.Fatalf("GetMeta failed: %v", err)
 	}
@@ -848,7 +848,7 @@ func testArtifactStorageFullWorkflow(t *testing.T, storage models.ArtifactStorag
 	}
 
 	// 8. Delete artifact
-	deletedMeta, err := storage.DeleteArtifact(ctx, hash, ref)
+	deletedMeta, err := storage.DeleteArtifact(ctx, models.ArtifactIdentifier{Hash: hash, Reference: &ref})
 	if err != nil {
 		t.Fatalf("Delete failed: %v", err)
 	}

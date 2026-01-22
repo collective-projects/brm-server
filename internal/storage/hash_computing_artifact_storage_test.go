@@ -66,7 +66,7 @@ func TestHashComputingArtifactStorageKnownHashDelegation(t *testing.T) {
 	testData := []byte("test data")
 
 	// Create with known hash - should delegate directly
-	meta, err := wrapper.CreateArtifact(ctx, hash, bytes.NewReader(testData), int64(len(testData)), nil)
+	meta, err := wrapper.CreateArtifact(ctx, models.ArtifactIdentifier{Hash: hash}, bytes.NewReader(testData), int64(len(testData)), nil)
 	if err != nil {
 		t.Fatalf("Create failed: %v", err)
 	}
@@ -77,7 +77,7 @@ func TestHashComputingArtifactStorageKnownHashDelegation(t *testing.T) {
 
 	// Verify data was stored correctly
 	readReq := models.ArtifactRange{
-		Hash: hash,
+		Identifier: models.ArtifactIdentifier{Hash: hash},
 		Range: models.ByteRange{
 			Offset: 0,
 			Length: -1,
@@ -113,7 +113,7 @@ func TestHashComputingArtifactStorageEmptyHash(t *testing.T) {
 	testData := []byte("test data for hash computation")
 
 	// Create with empty hash
-	meta, err := wrapper.CreateArtifact(ctx, "", bytes.NewReader(testData), int64(len(testData)), nil)
+	meta, err := wrapper.CreateArtifact(ctx, models.ArtifactIdentifier{Hash: ""}, bytes.NewReader(testData), int64(len(testData)), nil)
 	if err != nil {
 		t.Fatalf("Create failed: %v", err)
 	}
@@ -133,7 +133,7 @@ func TestHashComputingArtifactStorageEmptyHash(t *testing.T) {
 
 	// Verify data can be read back using computed hash
 	readReq := models.ArtifactRange{
-		Hash: expectedHash,
+		Identifier: models.ArtifactIdentifier{Hash: expectedHash},
 		Range: models.ByteRange{
 			Offset: 0,
 			Length: -1,
@@ -169,7 +169,7 @@ func TestHashComputingArtifactStorageShortHash(t *testing.T) {
 	testData := []byte("test data")
 
 	// Create with short hash
-	meta, err := wrapper.CreateArtifact(ctx, "ab", bytes.NewReader(testData), int64(len(testData)), nil)
+	meta, err := wrapper.CreateArtifact(ctx, models.ArtifactIdentifier{Hash: "ab"}, bytes.NewReader(testData), int64(len(testData)), nil)
 	if err != nil {
 		t.Fatalf("Create failed: %v", err)
 	}
@@ -200,7 +200,7 @@ func TestHashComputingArtifactStorageUnknownString(t *testing.T) {
 	// Test different case variations
 	for _, unknownHash := range []string{"UNKNOWN", "unknown", "UnKnOwN"} {
 		t.Run(unknownHash, func(t *testing.T) {
-			meta, err := wrapper.CreateArtifact(ctx, unknownHash, bytes.NewReader(testData), int64(len(testData)), nil)
+			meta, err := wrapper.CreateArtifact(ctx, models.ArtifactIdentifier{Hash: unknownHash}, bytes.NewReader(testData), int64(len(testData)), nil)
 			if err != nil {
 				t.Fatalf("Create failed: %v", err)
 			}
@@ -241,7 +241,7 @@ func TestHashComputingArtifactStorageHashComputationCorrectness(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			meta, err := wrapper.CreateArtifact(ctx, "", bytes.NewReader(tc.data), int64(len(tc.data)), nil)
+			meta, err := wrapper.CreateArtifact(ctx, models.ArtifactIdentifier{Hash: ""}, bytes.NewReader(tc.data), int64(len(tc.data)), nil)
 			if err != nil {
 				t.Fatalf("Create failed: %v", err)
 			}
@@ -277,7 +277,7 @@ func TestHashComputingArtifactStorageExistingHash(t *testing.T) {
 	computedHash := hex.EncodeToString(hasher.Sum(nil))
 
 	// Create artifact with known hash first
-	_, err = wrapper.CreateArtifact(ctx, computedHash, bytes.NewReader(testData), int64(len(testData)), nil)
+	_, err = wrapper.CreateArtifact(ctx, models.ArtifactIdentifier{Hash: computedHash}, bytes.NewReader(testData), int64(len(testData)), nil)
 	if err != nil {
 		t.Fatalf("Initial create failed: %v", err)
 	}
@@ -292,7 +292,7 @@ func TestHashComputingArtifactStorageExistingHash(t *testing.T) {
 		},
 	}
 
-	resultMeta, err := wrapper.CreateArtifact(ctx, "", bytes.NewReader(testData), int64(len(testData)), meta)
+	resultMeta, err := wrapper.CreateArtifact(ctx, models.ArtifactIdentifier{Hash: ""}, bytes.NewReader(testData), int64(len(testData)), meta)
 	if err != nil {
 		t.Fatalf("Create with existing hash failed: %v", err)
 	}
@@ -334,13 +334,13 @@ func TestHashComputingArtifactStorageTempFileCleanup(t *testing.T) {
 	tempHash := wrapper.generateTempHash()
 
 	// Create temp artifact
-	_, err = storage.CreateArtifact(ctx, tempHash, bytes.NewReader(testData), int64(len(testData)), nil)
+	_, err = storage.CreateArtifact(ctx, models.ArtifactIdentifier{Hash: tempHash}, bytes.NewReader(testData), int64(len(testData)), nil)
 	if err != nil {
 		t.Fatalf("Failed to create temp artifact: %v", err)
 	}
 
 	// Verify it exists
-	_, err = storage.GetMeta(ctx, tempHash)
+	_, err = storage.GetMeta(ctx, models.ArtifactIdentifier{Hash: tempHash})
 	if err != nil {
 		t.Fatalf("Temp artifact should exist: %v", err)
 	}
@@ -352,7 +352,7 @@ func TestHashComputingArtifactStorageTempFileCleanup(t *testing.T) {
 	}
 
 	// Verify temp artifact is gone (moved to trash or deleted)
-	_, err = storage.GetMeta(ctx, tempHash)
+	_, err = storage.GetMeta(ctx, models.ArtifactIdentifier{Hash: tempHash})
 	if err == nil {
 		// Check if it's in trash
 		trashPath := filepath.Join(baseDir, ".trash")
@@ -383,14 +383,14 @@ func TestHashComputingArtifactStorageDelegation(t *testing.T) {
 	testData := []byte("test data")
 
 	// Create artifact
-	_, err = wrapper.CreateArtifact(ctx, hash, bytes.NewReader(testData), int64(len(testData)), nil)
+	_, err = wrapper.CreateArtifact(ctx, models.ArtifactIdentifier{Hash: hash}, bytes.NewReader(testData), int64(len(testData)), nil)
 	if err != nil {
 		t.Fatalf("Create failed: %v", err)
 	}
 
 	// Test Read delegation
 	readReq := models.ArtifactRange{
-		Hash: hash,
+		Identifier: models.ArtifactIdentifier{Hash: hash},
 		Range: models.ByteRange{
 			Offset: 0,
 			Length: -1,
@@ -403,7 +403,7 @@ func TestHashComputingArtifactStorageDelegation(t *testing.T) {
 	rc.Close()
 
 	// Test GetMeta delegation
-	meta, err := wrapper.GetMeta(ctx, hash)
+	meta, err := wrapper.GetMeta(ctx, models.ArtifactIdentifier{Hash: hash})
 	if err != nil {
 		t.Fatalf("GetMeta failed: %v", err)
 	}
@@ -425,7 +425,7 @@ func TestHashComputingArtifactStorageDelegation(t *testing.T) {
 
 	// Test Delete delegation
 	ref := updatedMeta.References[0]
-	_, err = wrapper.DeleteArtifact(ctx, hash, ref)
+	_, err = wrapper.DeleteArtifact(ctx, models.ArtifactIdentifier{Hash: hash, Reference: &ref})
 	if err != nil {
 		t.Fatalf("Delete failed: %v", err)
 	}
@@ -451,7 +451,7 @@ func TestHashComputingArtifactStorageConcurrentUnknownHashes(t *testing.T) {
 
 	for i := 0; i < numGoroutines; i++ {
 		go func() {
-			meta, err := wrapper.CreateArtifact(ctx, "", bytes.NewReader(testData), int64(len(testData)), nil)
+			meta, err := wrapper.CreateArtifact(ctx, models.ArtifactIdentifier{Hash: ""}, bytes.NewReader(testData), int64(len(testData)), nil)
 			if err != nil {
 				errors <- err
 				return
@@ -506,7 +506,7 @@ func TestHashComputingArtifactStorageWithMetadata(t *testing.T) {
 		},
 	}
 
-	createdMeta, err := wrapper.CreateArtifact(ctx, "", bytes.NewReader(testData), int64(len(testData)), meta)
+	createdMeta, err := wrapper.CreateArtifact(ctx, models.ArtifactIdentifier{Hash: ""}, bytes.NewReader(testData), int64(len(testData)), meta)
 	if err != nil {
 		t.Fatalf("Create failed: %v", err)
 	}

@@ -13,6 +13,37 @@ type ArtifactReference struct {
 	ReferencedTimestamp int64  `json:"referencedTimestamp"`
 }
 
+// ArtifactIdentifier identifies an artifact by hash and/or reference.
+// Can contain both Hash and Reference fields. At least one must be set.
+type ArtifactIdentifier struct {
+	Hash      string             `json:"hash,omitempty"`
+	Reference *ArtifactReference `json:"reference,omitempty"`
+}
+
+// HasHash returns true if this identifier has a hash.
+func (id ArtifactIdentifier) HasHash() bool {
+	return id.Hash != ""
+}
+
+// HasReference returns true if this identifier has a reference.
+func (id ArtifactIdentifier) HasReference() bool {
+	return id.Reference != nil
+}
+
+// String returns a string representation of the identifier.
+func (id ArtifactIdentifier) String() string {
+	if id.HasHash() && id.HasReference() {
+		return fmt.Sprintf("%s (%s::%s)", id.Hash, id.Reference.Repo, id.Reference.Name)
+	}
+	if id.HasHash() {
+		return id.Hash
+	}
+	if id.HasReference() {
+		return fmt.Sprintf("%s::%s", id.Reference.Repo, id.Reference.Name)
+	}
+	return "<invalid>"
+}
+
 // ArtifactMeta holds metadata about an artifact
 type ArtifactMeta struct {
 	Hash             string              `json:"hash"`
@@ -47,11 +78,11 @@ type ByteRange struct {
 	Length int64 `json:"length"` // Number of bytes to read/write. -1 means "until the end"
 }
 
-// ArtifactRange identifies a specific range within an artifact by hash.
+// ArtifactRange identifies a specific range within an artifact.
 // It replaces ArtifactRequest, ArtifactResponse, and ArtifactRangeUpdate.
 type ArtifactRange struct {
-	Hash  string    `json:"hash"`
-	Range ByteRange `json:"range"`
+	Identifier ArtifactIdentifier `json:"identifier"`
+	Range      ByteRange          `json:"range"`
 }
 
 // ArtifactStorageInfo contains information about a storage instance.
@@ -86,7 +117,7 @@ type ArtifactStorage interface {
 	// If artifact exists, validates length match and merges references without writing data.
 	// Implementations are definitely expected to support this method.
 	// Implementations should handle their thread-safety internally, if they are declared as thread-safe.
-	CreateArtifact(ctx context.Context, hash string, r io.Reader, size int64, meta *ArtifactMeta) (*ArtifactMeta, error)
+	CreateArtifact(ctx context.Context, id ArtifactIdentifier, r io.Reader, size int64, meta *ArtifactMeta) (*ArtifactMeta, error)
 
 	// ReadBlob returns a stream (rc) for the requested data.
 	// It returns 'actual' containing the actual range being returned (calculated).
@@ -100,17 +131,19 @@ type ArtifactStorage interface {
 	UpdateBlob(ctx context.Context, req ArtifactRange, r io.Reader) error
 
 	// DeleteArtifact removes a specific reference to an artifact.
+	// If id contains a reference, deletes that reference. If id only contains a hash, deletes all references.
 	// If no references remain, the artifact is moved to trash and nil is returned.
 	// If references remain, only the metadata is updated and the updated metadata is returned.
 	// Implementations are definitely expected to suport this method.
 	// Implementations should handle their thread-safety internally, if they are declared as thread-safe. Must be blocked if a Create operation is in progress.
-	DeleteArtifact(ctx context.Context, hash string, ref ArtifactReference) (*ArtifactMeta, error)
+	DeleteArtifact(ctx context.Context, id ArtifactIdentifier) (*ArtifactMeta, error)
 
 	// Meta operations
 	// Implementations are definitely expected to suport this method.
-	GetMeta(ctx context.Context, hash string) (*ArtifactMeta, error)
+	GetMeta(ctx context.Context, id ArtifactIdentifier) (*ArtifactMeta, error)
 
 	// UpdateMeta updates the metadata for an artifact. Clients may need to store additional small info in metadata.
+	// Clients should not be changing implementation specific fields, like references, created timestamp, etc. These are managed by the storage implementation.
 	// Implementations are definitely expected to suport this method.
 	// Implementations should handle their thread-safety internally, if they are declared as thread-safe.
 	UpdateMeta(ctx context.Context, meta ArtifactMeta) (*ArtifactMeta, error)

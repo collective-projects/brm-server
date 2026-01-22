@@ -3,6 +3,8 @@ package private
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"testing"
@@ -49,8 +51,12 @@ func TestDockerRegistryPrivateServicePutManifest(t *testing.T) {
 
 	// Verify reference mapping exists and contains digest
 	digest := service.CalculateDigest(manifestData)
-	refKey := fmt.Sprintf("manifest-ref:%s:%s", name, reference)
-	refMeta, err := service.storage.GetMeta(ctx, refKey)
+	// Calculate the same hash that the service generates for reference mapping
+	key := fmt.Sprintf("%s::%s", name, reference)
+	hasher := sha256.New()
+	hasher.Write([]byte(key))
+	refKey := hex.EncodeToString(hasher.Sum(nil))
+	refMeta, err := service.storage.GetMeta(ctx, models.ArtifactIdentifier{Hash: refKey})
 	if err != nil {
 		t.Fatalf("Reference mapping not found: %v", err)
 	}

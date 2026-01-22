@@ -79,11 +79,11 @@ func (s *DockerRegistryProxyService) GetManifest(ctx context.Context, name, refe
 	cacheKey := s.getCacheKey(name, digest)
 
 	// Check cache
-	meta, err := s.storage.GetMeta(ctx, cacheKey)
+	meta, err := s.storage.GetMeta(ctx, models.ArtifactIdentifier{Hash: cacheKey})
 	if err == nil && meta != nil && !s.isCacheExpired(meta) {
 		// Cache hit - read from cache
 		readReq := models.ArtifactRange{
-			Hash: cacheKey,
+			Identifier: models.ArtifactIdentifier{Hash: cacheKey},
 			Range: models.ByteRange{
 				Offset: 0,
 				Length: -1,
@@ -112,7 +112,7 @@ func (s *DockerRegistryProxyService) GetManifest(ctx context.Context, name, refe
 		References:       []models.ArtifactReference{ref},
 	}
 
-	_, err = s.storage.CreateArtifact(ctx, cacheKey, bytes.NewReader(manifestData), int64(len(manifestData)), meta)
+	_, err = s.storage.CreateArtifact(ctx, models.ArtifactIdentifier{Hash: cacheKey}, bytes.NewReader(manifestData), int64(len(manifestData)), meta)
 	if err != nil {
 		// Log error but continue - cache write failure shouldn't break the request
 	}
@@ -134,11 +134,11 @@ func (s *DockerRegistryProxyService) GetBlob(ctx context.Context, name, digest s
 	cacheKey := s.getCacheKey(name, digest)
 
 	// Check cache
-	meta, err := s.storage.GetMeta(ctx, cacheKey)
+	meta, err := s.storage.GetMeta(ctx, models.ArtifactIdentifier{Hash: cacheKey})
 	if err == nil && meta != nil && !s.isCacheExpired(meta) {
 		// Cache hit - read from cache
 		readReq := models.ArtifactRange{
-			Hash: cacheKey,
+			Identifier: models.ArtifactIdentifier{Hash: cacheKey},
 			Range: models.ByteRange{
 				Offset: 0,
 				Length: -1,
@@ -181,7 +181,7 @@ func (s *DockerRegistryProxyService) GetBlob(ctx context.Context, name, digest s
 	// Start goroutine to write to cache (non-blocking)
 	go func() {
 		defer cacheReader.Close()
-		_, err := s.storage.CreateArtifact(ctx, cacheKey, cacheReader, size, meta)
+		_, err := s.storage.CreateArtifact(ctx, models.ArtifactIdentifier{Hash: cacheKey}, cacheReader, size, meta)
 		if err != nil {
 			cacheDone <- fmt.Errorf("failed to cache blob: %w", err)
 			return
@@ -237,7 +237,7 @@ func (s *DockerRegistryProxyService) CheckBlobExists(ctx context.Context, name, 
 	cacheKey := s.getCacheKey(name, digest)
 
 	// Check cache first
-	meta, err := s.storage.GetMeta(ctx, cacheKey)
+	meta, err := s.storage.GetMeta(ctx, models.ArtifactIdentifier{Hash: cacheKey})
 	if err == nil && meta != nil && !s.isCacheExpired(meta) {
 		return true, meta.Length, nil
 	}

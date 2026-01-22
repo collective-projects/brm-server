@@ -61,7 +61,8 @@ func (h *HashComputingArtifactStorage) generateTempHash() string {
 // cleanupTempHash removes a temporary artifact by adding a cleanup reference and then deleting it.
 func (h *HashComputingArtifactStorage) cleanupTempHash(ctx context.Context, tempHash string) error {
 	// Check if temp artifact exists
-	tempMeta, err := h.storage.GetMeta(ctx, tempHash)
+	tempID := models.ArtifactIdentifier{Hash: tempHash}
+	tempMeta, err := h.storage.GetMeta(ctx, tempID)
 	if err != nil {
 		// Already doesn't exist or error reading - nothing to clean up
 		return nil
@@ -86,7 +87,11 @@ func (h *HashComputingArtifactStorage) cleanupTempHash(ctx context.Context, temp
 		Name: "temp-cleanup",
 		Repo: "temp-cleanup",
 	}
-	_, err = h.storage.DeleteArtifact(ctx, tempHash, cleanupRef)
+	cleanupID := models.ArtifactIdentifier{
+		Hash:      tempHash,
+		Reference: &cleanupRef,
+	}
+	_, err = h.storage.DeleteArtifact(ctx, cleanupID)
 	return err
 }
 
@@ -106,7 +111,8 @@ func (h *HashComputingArtifactStorage) handleExistingHash(
 	}
 
 	// Get existing metadata
-	existingMeta, err := h.storage.GetMeta(ctx, computedHash)
+	computedID := models.ArtifactIdentifier{Hash: computedHash}
+	existingMeta, err := h.storage.GetMeta(ctx, computedID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get existing metadata: %w", err)
 	}
@@ -117,7 +123,7 @@ func (h *HashComputingArtifactStorage) handleExistingHash(
 		if tempMeta != nil {
 			mergeSize = tempMeta.Length
 		}
-		return h.storage.CreateArtifact(ctx, computedHash, bytes.NewReader(nil), mergeSize, meta)
+		return h.storage.CreateArtifact(ctx, computedID, bytes.NewReader(nil), mergeSize, meta)
 	}
 
 	return existingMeta, nil
@@ -141,7 +147,8 @@ func (h *HashComputingArtifactStorage) moveToFinalHash(
 	// Attempt to move from temp to final location
 	if err := moveStorage.Move(ctx, tempHash, computedHash); err != nil {
 		// Move failed - check if hash now exists (another goroutine might have created it)
-		existingMeta, checkErr := h.storage.GetMeta(ctx, computedHash)
+		computedID := models.ArtifactIdentifier{Hash: computedHash}
+		existingMeta, checkErr := h.storage.GetMeta(ctx, computedID)
 		if checkErr == nil && existingMeta != nil {
 			// Hash exists now (race condition: another goroutine created it)
 			// Handle it as existing hash
@@ -159,22 +166,31 @@ func (h *HashComputingArtifactStorage) moveToFinalHash(
 		if err != nil {
 			// Metadata update failed, but file is already moved
 			// Try to get the metadata
-			return h.storage.GetMeta(ctx, computedHash)
+			computedID := models.ArtifactIdentifier{Hash: computedHash}
+			return h.storage.GetMeta(ctx, computedID)
 		}
 		return updatedMeta, nil
 	}
 
 	// Get final metadata
-	return h.storage.GetMeta(ctx, computedHash)
+	computedID := models.ArtifactIdentifier{Hash: computedHash}
+	return h.storage.GetMeta(ctx, computedID)
 }
 
 // CreateArtifact streams data from 'r' to storage.
 // If hash is unknown (empty, len<3, or "UNKNOWN"), computes SHA-256 hash automatically.
-func (h *HashComputingArtifactStorage) CreateArtifact(ctx context.Context, hash string, r io.Reader, size int64, meta *models.ArtifactMeta) (*models.ArtifactMeta, error) {
+func (h *HashComputingArtifactStorage) CreateArtifact(ctx context.Context, id models.ArtifactIdentifier, r io.Reader, size int64, meta *models.ArtifactMeta) (*models.ArtifactMeta, error) {
+	// Only handle hash-based identifiers (references already have hash in meta)
+	if id.HasReference() && !id.HasHash() {
+		// Delegate to underlying storage
+		return h.storage.CreateArtifact(ctx, id, r, size, meta)
+	}
+
+	hash := id.Hash
 	// Check if hash is unknown
 	if !h.isUnknownHash(hash) {
 		// Known hash: delegate directly to underlying storage
-		return h.storage.CreateArtifact(ctx, hash, r, size, meta)
+		return h.storage.CreateArtifact(ctx, id, r, size, meta)
 	}
 
 	// Unknown hash: compute it using temp storage approach
@@ -187,7 +203,8 @@ func (h *HashComputingArtifactStorage) CreateArtifact(ctx context.Context, hash 
 	teeReader := io.TeeReader(r, hasher)
 
 	// Create artifact with temp hash (this streams the data)
-	tempMeta, err := h.storage.CreateArtifact(ctx, tempHash, teeReader, size, meta)
+	tempID := models.ArtifactIdentifier{Hash: tempHash}
+	tempMeta, err := h.storage.CreateArtifact(ctx, tempID, teeReader, size, meta)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create with temp hash: %w", err)
 	}
@@ -196,7 +213,8 @@ func (h *HashComputingArtifactStorage) CreateArtifact(ctx context.Context, hash 
 	computedHash := hex.EncodeToString(hasher.Sum(nil))
 
 	// Check if computed hash already exists
-	existingMeta, err := h.storage.GetMeta(ctx, computedHash)
+	computedID := models.ArtifactIdentifier{Hash: computedHash}
+	existingMeta, err := h.storage.GetMeta(ctx, computedID)
 	if err == nil && existingMeta != nil {
 		// Hash already exists: cleanup temp file and merge references
 		return h.handleExistingHash(ctx, computedHash, tempHash, tempMeta, meta)
@@ -217,13 +235,13 @@ func (h *HashComputingArtifactStorage) UpdateBlob(ctx context.Context, req model
 }
 
 // DeleteArtifact removes a specific reference to an artifact.
-func (h *HashComputingArtifactStorage) DeleteArtifact(ctx context.Context, hash string, ref models.ArtifactReference) (*models.ArtifactMeta, error) {
-	return h.storage.DeleteArtifact(ctx, hash, ref)
+func (h *HashComputingArtifactStorage) DeleteArtifact(ctx context.Context, id models.ArtifactIdentifier) (*models.ArtifactMeta, error) {
+	return h.storage.DeleteArtifact(ctx, id)
 }
 
 // GetMeta reads the metadata JSON file.
-func (h *HashComputingArtifactStorage) GetMeta(ctx context.Context, hash string) (*models.ArtifactMeta, error) {
-	return h.storage.GetMeta(ctx, hash)
+func (h *HashComputingArtifactStorage) GetMeta(ctx context.Context, id models.ArtifactIdentifier) (*models.ArtifactMeta, error) {
+	return h.storage.GetMeta(ctx, id)
 }
 
 // UpdateMeta overwrites the metadata JSON file.
