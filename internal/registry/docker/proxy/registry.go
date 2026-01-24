@@ -42,7 +42,7 @@ func NewDockerRegistryProxy(
 	}
 
 	// Create service
-	service, err := NewDockerRegistryProxyService(storageAlias, upstream, cacheTTL)
+	service, err := NewDockerRegistryProxyService(alias, storageAlias, upstream, cacheTTL)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create registry service: %w", err)
 	}

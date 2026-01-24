@@ -26,7 +26,7 @@ func setupTestStorage(t *testing.T) models.ArtifactStorage {
 // setupTestService creates a test service with storage
 func setupTestService(t *testing.T) (*DockerRegistryPrivateService, models.ArtifactStorage) {
 	testStorage := setupTestStorage(t)
-	service, err := NewDockerRegistryPrivateService("test-storage", "test description")
+	service, err := NewDockerRegistryPrivateService("test-registry", "test-storage", "test description")
 	if err != nil {
 		t.Fatalf("Failed to create service: %v", err)
 	}

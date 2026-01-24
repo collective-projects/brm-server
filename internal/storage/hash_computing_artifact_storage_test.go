@@ -288,7 +288,7 @@ func TestHashComputingArtifactStorageExistingHash(t *testing.T) {
 		Length:           int64(len(testData)),
 		CreatedTimestamp: time.Now().Unix(),
 		References: []models.ArtifactReference{
-			{Name: "ref1", Repo: "repo1", ReferencedTimestamp: time.Now().Unix()},
+			{Name: "ref1", Registry: "registry1", ReferencedTimestamp: time.Now().Unix()},
 		},
 	}
 
@@ -413,7 +413,7 @@ func TestHashComputingArtifactStorageDelegation(t *testing.T) {
 
 	// Test UpdateMeta delegation
 	meta.References = []models.ArtifactReference{
-		{Name: "test", Repo: "test", ReferencedTimestamp: time.Now().Unix()},
+		{Name: "test", Registry: "test", ReferencedTimestamp: time.Now().Unix()},
 	}
 	updatedMeta, err := wrapper.UpdateMeta(ctx, *meta)
 	if err != nil {
@@ -502,7 +502,7 @@ func TestHashComputingArtifactStorageWithMetadata(t *testing.T) {
 		Length:           int64(len(testData)),
 		CreatedTimestamp: time.Now().Unix(),
 		References: []models.ArtifactReference{
-			{Name: "ref1", Repo: "repo1", ReferencedTimestamp: time.Now().Unix()},
+			{Name: "ref1", Registry: "registry1", ReferencedTimestamp: time.Now().Unix()},
 		},
 	}
 

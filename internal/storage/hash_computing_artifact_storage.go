@@ -72,7 +72,7 @@ func (h *HashComputingArtifactStorage) cleanupTempHash(ctx context.Context, temp
 	if len(tempMeta.References) == 0 {
 		tempRef := models.ArtifactReference{
 			Name:                "temp-cleanup",
-			Repo:                "temp-cleanup",
+			Registry:                "temp-cleanup",
 			ReferencedTimestamp: time.Now().Unix(),
 		}
 		tempMeta.References = []models.ArtifactReference{tempRef}
@@ -85,7 +85,7 @@ func (h *HashComputingArtifactStorage) cleanupTempHash(ctx context.Context, temp
 	// Find and delete the cleanup reference
 	cleanupRef := models.ArtifactReference{
 		Name: "temp-cleanup",
-		Repo: "temp-cleanup",
+		Registry: "temp-cleanup",
 	}
 	cleanupID := models.ArtifactIdentifier{
 		Hash:      tempHash,

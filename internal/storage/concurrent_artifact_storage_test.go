@@ -92,7 +92,7 @@ func (m *mockStorage) DeleteArtifact(ctx context.Context, id models.ArtifactIden
 		found := false
 		newRefs := []models.ArtifactReference{}
 		for _, r := range meta.References {
-			if r.Name == ref.Name && r.Repo == ref.Repo {
+			if r.Name == ref.Name && r.Registry == ref.Registry {
 				found = true
 				// Skip this reference (remove it)
 			} else {
@@ -101,7 +101,7 @@ func (m *mockStorage) DeleteArtifact(ctx context.Context, id models.ArtifactIden
 		}
 
 		if !found {
-			return nil, fmt.Errorf("reference with name %s and repo %s not found for artifact %s", ref.Name, ref.Repo, hash)
+			return nil, fmt.Errorf("reference with name %s and repo %s not found for artifact %s", ref.Name, ref.Registry, hash)
 		}
 
 		// Update references
@@ -158,7 +158,7 @@ func TestConcurrentArtifactStorageDelegation(t *testing.T) {
 		Length:           int64(len(testData)),
 		CreatedTimestamp: time.Now().Unix(),
 		References: []models.ArtifactReference{
-			{Name: "ref1", Repo: "repo1", ReferencedTimestamp: time.Now().Unix()},
+			{Name: "ref1", Registry: "registry1", ReferencedTimestamp: time.Now().Unix()},
 		},
 	}
 
@@ -221,7 +221,7 @@ func TestConcurrentArtifactStorageConcurrentCreate(t *testing.T) {
 				Length:           int64(len(testData)),
 				CreatedTimestamp: time.Now().Unix(),
 				References: []models.ArtifactReference{
-					{Name: fmt.Sprintf("ref%d", id), Repo: "repo1", ReferencedTimestamp: time.Now().Unix()},
+					{Name: fmt.Sprintf("ref%d", id), Registry: "registry1", ReferencedTimestamp: time.Now().Unix()},
 				},
 			}
 			_, err := wrapper.CreateArtifact(ctx, models.ArtifactIdentifier{Hash: hash}, bytes.NewReader(testData), int64(len(testData)), meta)
@@ -273,7 +273,7 @@ func TestConcurrentArtifactStorageConcurrentDelete(t *testing.T) {
 	for i := 0; i < 10; i++ {
 		meta.References = append(meta.References, models.ArtifactReference{
 			Name:                fmt.Sprintf("ref%d", i),
-			Repo:                "repo1",
+			Registry:                "registry1",
 			ReferencedTimestamp: time.Now().Unix(),
 		})
 	}
@@ -343,7 +343,7 @@ func TestConcurrentArtifactStorageConcurrentDelete(t *testing.T) {
 		// Verify no duplicates in remaining references
 		refMap := make(map[string]bool)
 		for _, ref := range finalMeta.References {
-			key := ref.Name + ":" + ref.Repo
+			key := ref.Name + ":" + ref.Registry
 			if refMap[key] {
 				t.Errorf("Duplicate reference found: %s", key)
 			}
@@ -372,7 +372,7 @@ func TestConcurrentArtifactStorageCreateDeleteRace(t *testing.T) {
 		Length:           int64(len(testData)),
 		CreatedTimestamp: time.Now().Unix(),
 		References: []models.ArtifactReference{
-			{Name: "ref1", Repo: "repo1", ReferencedTimestamp: time.Now().Unix()},
+			{Name: "ref1", Registry: "registry1", ReferencedTimestamp: time.Now().Unix()},
 		},
 	}
 	createdMeta, err := wrapper.CreateArtifact(ctx, models.ArtifactIdentifier{Hash: hash}, bytes.NewReader(testData), int64(len(testData)), meta)
@@ -393,7 +393,7 @@ func TestConcurrentArtifactStorageCreateDeleteRace(t *testing.T) {
 			Length:           int64(len(testData)),
 			CreatedTimestamp: time.Now().Unix(),
 			References: []models.ArtifactReference{
-				{Name: "ref2", Repo: "repo1", ReferencedTimestamp: time.Now().Unix()},
+				{Name: "ref2", Registry: "registry1", ReferencedTimestamp: time.Now().Unix()},
 			},
 		}
 		_, err := wrapper.CreateArtifact(ctx, models.ArtifactIdentifier{Hash: hash}, bytes.NewReader(testData), int64(len(testData)), newMeta)

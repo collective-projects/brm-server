@@ -130,7 +130,7 @@ func TestSimpleFileStorageMetadataFileExtension(t *testing.T) {
 		References: []models.ArtifactReference{
 			{
 				Name:                "test",
-				Repo:                "docker:test",
+				Registry:                "docker:test",
 				ReferencedTimestamp: 1234567890,
 			},
 		},
@@ -166,8 +166,8 @@ func TestSimpleFileStorageMultipleReferences(t *testing.T) {
 		Length:           int64(len(testData)),
 		CreatedTimestamp: 1234567890,
 		References: []models.ArtifactReference{
-			{Name: "ref1", Repo: "repo1", ReferencedTimestamp: 1234567890},
-			{Name: "ref2", Repo: "repo2", ReferencedTimestamp: 1234567891},
+			{Name: "ref1", Registry: "registry1", ReferencedTimestamp: 1234567890},
+			{Name: "ref2", Registry: "registry2", ReferencedTimestamp: 1234567891},
 		},
 	}
 
@@ -209,7 +209,7 @@ func TestSimpleFileStorageReferenceMerging(t *testing.T) {
 		Length:           int64(len(testData)),
 		CreatedTimestamp: 1234567890,
 		References: []models.ArtifactReference{
-			{Name: "ref1", Repo: "repo1", ReferencedTimestamp: 1234567890},
+			{Name: "ref1", Registry: "registry1", ReferencedTimestamp: 1234567890},
 		},
 	}
 
@@ -224,7 +224,7 @@ func TestSimpleFileStorageReferenceMerging(t *testing.T) {
 		Length:           int64(len(testData)),
 		CreatedTimestamp: 1234567891,
 		References: []models.ArtifactReference{
-			{Name: "ref2", Repo: "repo2", ReferencedTimestamp: 1234567891},
+			{Name: "ref2", Registry: "registry2", ReferencedTimestamp: 1234567891},
 		},
 	}
 
@@ -246,7 +246,7 @@ func TestSimpleFileStorageReferenceMerging(t *testing.T) {
 	// Verify both references exist
 	refMap := make(map[string]models.ArtifactReference)
 	for _, ref := range createdMeta2.References {
-		key := ref.Name + ":" + ref.Repo
+		key := ref.Name + ":" + ref.Registry
 		refMap[key] = ref
 	}
 
@@ -318,8 +318,8 @@ func TestSimpleFileStorageDeleteWithMultipleReferences(t *testing.T) {
 		Length:           int64(len(testData)),
 		CreatedTimestamp: 1234567890,
 		References: []models.ArtifactReference{
-			{Name: "ref1", Repo: "repo1", ReferencedTimestamp: 1234567890},
-			{Name: "ref2", Repo: "repo2", ReferencedTimestamp: 1234567891},
+			{Name: "ref1", Registry: "registry1", ReferencedTimestamp: 1234567890},
+			{Name: "ref2", Registry: "registry2", ReferencedTimestamp: 1234567891},
 		},
 	}
 
@@ -384,7 +384,7 @@ func TestSimpleFileStorageDeleteLastReference(t *testing.T) {
 		Length:           int64(len(testData)),
 		CreatedTimestamp: 1234567890,
 		References: []models.ArtifactReference{
-			{Name: "ref1", Repo: "repo1", ReferencedTimestamp: 1234567890},
+			{Name: "ref1", Registry: "registry1", ReferencedTimestamp: 1234567890},
 		},
 	}
 
@@ -439,7 +439,7 @@ func TestSimpleFileStorageReferenceDeduplication(t *testing.T) {
 		Length:           int64(len(testData)),
 		CreatedTimestamp: 1234567890,
 		References: []models.ArtifactReference{
-			{Name: "ref1", Repo: "repo1", ReferencedTimestamp: 1234567890},
+			{Name: "ref1", Registry: "registry1", ReferencedTimestamp: 1234567890},
 		},
 	}
 
@@ -454,7 +454,7 @@ func TestSimpleFileStorageReferenceDeduplication(t *testing.T) {
 		Length:           int64(len(testData)),
 		CreatedTimestamp: 1234567891,
 		References: []models.ArtifactReference{
-			{Name: "ref1", Repo: "repo1", ReferencedTimestamp: 1234567895}, // Newer timestamp
+			{Name: "ref1", Registry: "registry1", ReferencedTimestamp: 1234567895}, // Newer timestamp
 		},
 	}
 

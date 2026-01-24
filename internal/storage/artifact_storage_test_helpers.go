@@ -29,7 +29,7 @@ func createTestMeta(hash, name, repo string, length int64) *models.ArtifactMeta 
 		References: []models.ArtifactReference{
 			{
 				Name:                name,
-				Repo:                repo,
+				Registry:                repo,
 				ReferencedTimestamp: now,
 			},
 		},
@@ -135,8 +135,8 @@ func testArtifactStorageCreate(t *testing.T, storage models.ArtifactStorage) {
 		if retrievedMeta.Hash != hash {
 			t.Errorf("Expected hash %s, got %s", hash, retrievedMeta.Hash)
 		}
-		if ref.Repo != "docker:hub.docker.com" {
-			t.Errorf("Expected repo docker:hub.docker.com, got %s", ref.Repo)
+		if ref.Registry != "docker:hub.docker.com" {
+			t.Errorf("Expected repo docker:hub.docker.com, got %s", ref.Registry)
 		}
 		if retrievedMeta.Length != int64(len(testData)) {
 			t.Errorf("Expected length %d, got %d", len(testData), retrievedMeta.Length)
@@ -538,7 +538,7 @@ func testArtifactStorageDelete(t *testing.T, storage models.ArtifactStorage) {
 		} else {
 			ref = models.ArtifactReference{
 				Name:                "test",
-				Repo:                "test",
+				Registry:                "test",
 				ReferencedTimestamp: meta.CreatedTimestamp,
 			}
 			// Update metadata with reference first
@@ -575,7 +575,7 @@ func testArtifactStorageDelete(t *testing.T, storage models.ArtifactStorage) {
 	t.Run("delete_nonexistent_artifact", func(t *testing.T) {
 		ref := models.ArtifactReference{
 			Name:                "test",
-			Repo:                "test",
+			Registry:                "test",
 			ReferencedTimestamp: time.Now().Unix(),
 		}
 		_, err := storage.DeleteArtifact(ctx, models.ArtifactIdentifier{Hash: "nonexistent", Reference: &ref})
@@ -643,8 +643,8 @@ func testArtifactStorageGetMeta(t *testing.T, storage models.ArtifactStorage) {
 		if retrievedMeta.Hash != hash {
 			t.Errorf("Expected hash %s, got %s", hash, retrievedMeta.Hash)
 		}
-		if ref.Repo != "docker:hub.docker.com" {
-			t.Errorf("Expected repo docker:hub.docker.com, got %s", ref.Repo)
+		if ref.Registry != "docker:hub.docker.com" {
+			t.Errorf("Expected repo docker:hub.docker.com, got %s", ref.Registry)
 		}
 		if retrievedMeta.Length != meta.Length {
 			t.Errorf("Expected length %d, got %d", meta.Length, retrievedMeta.Length)
@@ -680,7 +680,7 @@ func testArtifactStorageUpdateMeta(t *testing.T, storage models.ArtifactStorage)
 			References: []models.ArtifactReference{
 				{
 					Name:                "updated",
-					Repo:                "docker:updated",
+					Registry:                "docker:updated",
 					ReferencedTimestamp: now,
 				},
 			},
@@ -698,8 +698,8 @@ func testArtifactStorageUpdateMeta(t *testing.T, storage models.ArtifactStorage)
 		if ref.Name != "updated" {
 			t.Errorf("Expected name updated, got %s", ref.Name)
 		}
-		if ref.Repo != "docker:updated" {
-			t.Errorf("Expected repo docker:updated, got %s", ref.Repo)
+		if ref.Registry != "docker:updated" {
+			t.Errorf("Expected repo docker:updated, got %s", ref.Registry)
 		}
 	})
 
@@ -720,7 +720,7 @@ func testArtifactStorageUpdateMeta(t *testing.T, storage models.ArtifactStorage)
 			References: []models.ArtifactReference{
 				{
 					Name:                "new",
-					Repo:                "docker:new",
+					Registry:                "docker:new",
 					ReferencedTimestamp: now,
 				},
 			},
@@ -812,7 +812,7 @@ func testArtifactStorageFullWorkflow(t *testing.T, storage models.ArtifactStorag
 		References: []models.ArtifactReference{
 			{
 				Name:                "updated-workflow",
-				Repo:                "docker:updated",
+				Registry:                "docker:updated",
 				ReferencedTimestamp: now,
 			},
 		},

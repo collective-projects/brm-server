@@ -6,10 +6,10 @@ import (
 	"io"
 )
 
-// ArtifactReference represents a reference to an artifact by a specific name and repo
+// ArtifactReference represents a reference to an artifact by a specific name and registry
 type ArtifactReference struct {
 	Name                string `json:"name"`
-	Repo                string `json:"repo"`
+	Registry            string `json:"registry"`
 	ReferencedTimestamp int64  `json:"referencedTimestamp"`
 }
 
@@ -33,13 +33,13 @@ func (id ArtifactIdentifier) HasReference() bool {
 // String returns a string representation of the identifier.
 func (id ArtifactIdentifier) String() string {
 	if id.HasHash() && id.HasReference() {
-		return fmt.Sprintf("%s (%s::%s)", id.Hash, id.Reference.Repo, id.Reference.Name)
+		return fmt.Sprintf("%s (%s::%s)", id.Hash, id.Reference.Registry, id.Reference.Name)
 	}
 	if id.HasHash() {
 		return id.Hash
 	}
 	if id.HasReference() {
-		return fmt.Sprintf("%s::%s", id.Reference.Repo, id.Reference.Name)
+		return fmt.Sprintf("%s::%s", id.Reference.Registry, id.Reference.Name)
 	}
 	return "<invalid>"
 }
@@ -92,19 +92,19 @@ type ArtifactStorageInfo struct {
 
 // BaseStorage provides common functionality for all storage implementations.
 type BaseStorage struct {
-	alias string
+	Alias string
 }
 
 // GetStorageInfo returns information about the storage instance.
 func (b *BaseStorage) GetStorageInfo() ArtifactStorageInfo {
 	return ArtifactStorageInfo{
-		Alias: b.alias,
+		Alias: b.Alias,
 	}
 }
 
 // SetAlias sets the alias/name of the storage.
 func (b *BaseStorage) SetAlias(alias string) {
-	b.alias = alias
+	b.Alias = alias
 }
 
 // ArtifactStorage is the high-performance interface.

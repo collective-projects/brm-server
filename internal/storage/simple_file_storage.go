@@ -32,9 +32,9 @@ func NewSimpleFileStorage(alias, baseDir string) (*SimpleFileStorage, error) {
 	return s, nil
 }
 
-// computeReferenceHash computes SHA256 of "Repo::Name" for reference-based storage.
+// computeReferenceHash computes SHA256 of "Registry::Name" for reference-based storage.
 func computeReferenceHash(ref *models.ArtifactReference) string {
-	input := ref.Repo + "::" + ref.Name
+	input := ref.Registry + "::" + ref.Name
 	hash := sha256.Sum256([]byte(input))
 	return hex.EncodeToString(hash[:])
 }
@@ -44,14 +44,14 @@ func computeReferenceHash(ref *models.ArtifactReference) string {
 func (s *SimpleFileStorage) getPaths(hash string) (dir, blobPath, metaPath string) {
 	if len(hash) < 2 {
 		dir = filepath.Join(s.baseDir, "blob")
-		blobPath = filepath.Join(dir, hash+".blob")
-		metaPath = filepath.Join(s.baseDir, "meta", hash+".meta")
+		blobPath = filepath.Join(dir, hash)
+		metaPath = filepath.Join(s.baseDir, "meta", hash)
 	} else {
 		subDir := hash[:2]
 		fileName := hash[2:]
 		dir = filepath.Join(s.baseDir, "blob", subDir)
-		blobPath = filepath.Join(dir, fileName+".blob")
-		metaPath = filepath.Join(s.baseDir, "meta", subDir, fileName+".meta")
+		blobPath = filepath.Join(dir, fileName)
+		metaPath = filepath.Join(s.baseDir, "meta", subDir, fileName)
 	}
 	return
 }
@@ -60,12 +60,12 @@ func (s *SimpleFileStorage) getPaths(hash string) (dir, blobPath, metaPath strin
 func (s *SimpleFileStorage) getRefPath(refHash string) (dir, refPath string) {
 	if len(refHash) < 2 {
 		dir = filepath.Join(s.baseDir, "ref")
-		refPath = filepath.Join(dir, refHash+".ref")
+		refPath = filepath.Join(dir, refHash)
 	} else {
 		subDir := refHash[:2]
 		fileName := refHash[2:]
 		dir = filepath.Join(s.baseDir, "ref", subDir)
-		refPath = filepath.Join(dir, fileName+".ref")
+		refPath = filepath.Join(dir, fileName)
 	}
 	return
 }
@@ -119,27 +119,27 @@ func (s *SimpleFileStorage) deleteRef(ref *models.ArtifactReference) error {
 func (s *SimpleFileStorage) getTrashPath(hash string) (dir, blobPath, metaPath string) {
 	if len(hash) < 2 {
 		dir = filepath.Join(s.baseDir, ".trash", "blob")
-		blobPath = filepath.Join(dir, hash+".blob")
-		metaPath = filepath.Join(s.baseDir, ".trash", "meta", hash+".meta")
+		blobPath = filepath.Join(dir, hash)
+		metaPath = filepath.Join(s.baseDir, ".trash", "meta", hash)
 	} else {
 		subDir := hash[:2]
 		fileName := hash[2:]
 		dir = filepath.Join(s.baseDir, ".trash", "blob", subDir)
-		blobPath = filepath.Join(dir, fileName+".blob")
-		metaPath = filepath.Join(s.baseDir, ".trash", "meta", subDir, fileName+".meta")
+		blobPath = filepath.Join(dir, fileName)
+		metaPath = filepath.Join(s.baseDir, ".trash", "meta", subDir, fileName)
 	}
 	return
 }
 
-// mergeReferences merges new references into existing references, deduplicating by Name+Repo.
-// If a reference with the same Name+Repo exists, updates ReferencedTimestamp to the latest.
+// mergeReferences merges new references into existing references, deduplicating by Name+Registry.
+// If a reference with the same Name+Registry exists, updates ReferencedTimestamp to the latest.
 func mergeReferences(existing, new []models.ArtifactReference) []models.ArtifactReference {
 	result := make([]models.ArtifactReference, 0, len(existing)+len(new))
-	refMap := make(map[string]int) // key: "name:repo", value: index in result
+	refMap := make(map[string]int) // key: "name:registry", value: index in result
 
 	// Add existing references to map
 	for _, ref := range existing {
-		key := ref.Name + ":" + ref.Repo
+		key := ref.Name + ":" + ref.Registry
 		if idx, exists := refMap[key]; exists {
 			// Update timestamp if new one is later
 			if ref.ReferencedTimestamp > result[idx].ReferencedTimestamp {
@@ -153,7 +153,7 @@ func mergeReferences(existing, new []models.ArtifactReference) []models.Artifact
 
 	// Add new references
 	for _, ref := range new {
-		key := ref.Name + ":" + ref.Repo
+		key := ref.Name + ":" + ref.Registry
 		if idx, exists := refMap[key]; exists {
 			// Update timestamp if new one is later
 			if ref.ReferencedTimestamp > result[idx].ReferencedTimestamp {
@@ -478,7 +478,7 @@ func (s *SimpleFileStorage) DeleteArtifact(ctx context.Context, id models.Artifa
 		found := false
 		newReferences := make([]models.ArtifactReference, 0, len(existingMeta.References))
 		for _, existingRef := range existingMeta.References {
-			if existingRef.Name == ref.Name && existingRef.Repo == ref.Repo {
+			if existingRef.Name == ref.Name && existingRef.Registry == ref.Registry {
 				found = true
 				// Delete the reference link
 				if err := s.deleteRef(&existingRef); err != nil {
@@ -491,7 +491,7 @@ func (s *SimpleFileStorage) DeleteArtifact(ctx context.Context, id models.Artifa
 		}
 
 		if !found {
-			return nil, fmt.Errorf("reference with name %s and repo %s not found for artifact %s", ref.Name, ref.Repo, hash)
+			return nil, fmt.Errorf("reference with name %s and repo %s not found for artifact %s", ref.Name, ref.Registry, hash)
 		}
 
 		// Update metadata with remaining references

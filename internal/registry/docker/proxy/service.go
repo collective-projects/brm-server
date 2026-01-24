@@ -19,10 +19,12 @@ type DockerRegistryProxyService struct {
 	client         *DockerRegistryProxyClient
 	cacheTTL       time.Duration
 	upstreamConfig *models.UpstreamRegistry
+	registryAlias  string
 }
 
 // NewDockerRegistryProxyService creates a new Docker registry service
 func NewDockerRegistryProxyService(
+	registryAlias string,
 	storageAlias string,
 	upstream *models.UpstreamRegistry,
 	cacheTTL int64,
@@ -40,6 +42,7 @@ func NewDockerRegistryProxyService(
 		client:         client,
 		cacheTTL:       ttl,
 		upstreamConfig: upstream,
+		registryAlias:  registryAlias,
 	}, nil
 }
 
@@ -102,7 +105,7 @@ func (s *DockerRegistryProxyService) GetManifest(ctx context.Context, name, refe
 	// Cache miss or expired - store in cache
 	ref := models.ArtifactReference{
 		Name:                name,
-		Repo:                "manifest",
+		Registry:            s.registryAlias,
 		ReferencedTimestamp: time.Now().Unix(),
 	}
 	meta = &models.ArtifactMeta{
@@ -164,7 +167,7 @@ func (s *DockerRegistryProxyService) GetBlob(ctx context.Context, name, digest s
 	// Prepare metadata for cache
 	ref := models.ArtifactReference{
 		Name:                name,
-		Repo:                "blob",
+		Registry:            s.registryAlias,
 		ReferencedTimestamp: time.Now().Unix(),
 	}
 	meta = &models.ArtifactMeta{

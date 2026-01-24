@@ -18,9 +18,10 @@ import (
 
 // DockerRegistryPrivateService handles core registry logic for private registries
 type DockerRegistryPrivateService struct {
-	storage     models.ArtifactStorage
-	description string
-	logger      *slog.Logger
+	storage       models.ArtifactStorage
+	registryAlias string
+	description   string
+	logger        *slog.Logger
 
 	// Blob upload session management
 	uploadSessions map[string]*UploadSession
@@ -39,13 +40,15 @@ type UploadSession struct {
 
 // NewDockerRegistryPrivateService creates a new private Docker registry service
 func NewDockerRegistryPrivateService(
+	registryAlias string,
 	storageAlias string,
 	description string,
 ) (*DockerRegistryPrivateService, error) {
 	service := &DockerRegistryPrivateService{
+		registryAlias:  registryAlias,
 		description:    description,
 		uploadSessions: make(map[string]*UploadSession),
-		logger:         slog.Default().With("component", "docker-registry-private", "description", description),
+		logger:         slog.Default().With("component", "docker-registry-private", "registry", registryAlias),
 	}
 
 	service.logger.Debug("Private Docker registry service created", "storageAlias", storageAlias)
@@ -139,29 +142,21 @@ func (s *DockerRegistryPrivateService) validateDigest(reader io.Reader, expected
 func (s *DockerRegistryPrivateService) GetManifest(ctx context.Context, name, reference string) ([]byte, string, error) {
 	s.logger.Debug("GetManifest called", "name", name, "reference", reference)
 
-	// First, look up the digest from the reference mapping
-	refKey := s.getManifestRefKey(name, reference)
-	s.logger.Debug("Looking up manifest reference", "refKey", refKey)
-	meta, err := s.storage.GetMeta(ctx, models.ArtifactIdentifier{Hash: refKey})
+	// Look up the manifest by reference (uses ref/ folder internally)
+	manifestRef := models.ArtifactReference{
+		Name:     fmt.Sprintf("manifest:%s:%s", name, reference),
+		Registry: s.description,
+	}
+
+	// Get metadata to resolve reference to hash
+	meta, err := s.storage.GetMeta(ctx, models.ArtifactIdentifier{Reference: &manifestRef})
 	if err != nil {
-		s.logger.Debug("Manifest reference not found", "refKey", refKey, "error", err)
+		s.logger.Debug("Manifest reference not found", "ref", manifestRef.Name, "error", err)
 		return nil, "", fmt.Errorf("manifest reference not found: %w", err)
 	}
 
-	// Extract digest from metadata (stored in References with Repo="digest")
-	digest := ""
-	for _, ref := range meta.References {
-		if ref.Repo == "digest" {
-			digest = ref.Name
-			break
-		}
-	}
-	if digest == "" {
-		return nil, "", fmt.Errorf("invalid manifest reference: digest not found")
-	}
-
-	// Retrieve manifest by digest
-	storageKey := s.getStorageKey(digest)
+	// Retrieve manifest by digest (hash is already without "sha256:" prefix)
+	storageKey := meta.Hash
 	readReq := models.ArtifactRange{
 		Identifier: models.ArtifactIdentifier{Hash: storageKey},
 		Range: models.ByteRange{
@@ -202,32 +197,19 @@ func (s *DockerRegistryPrivateService) GetManifest(ctx context.Context, name, re
 func (s *DockerRegistryPrivateService) CheckManifestExists(ctx context.Context, name, reference string) (bool, string, error) {
 	s.logger.Debug("CheckManifestExists called", "name", name, "reference", reference)
 
-	refKey := s.getManifestRefKey(name, reference)
-	meta, err := s.storage.GetMeta(ctx, models.ArtifactIdentifier{Hash: refKey})
+	manifestRef := models.ArtifactReference{
+		Name:     fmt.Sprintf("%s:%s", name, reference),
+		Registry: s.registryAlias,
+	}
+
+	meta, err := s.storage.GetMeta(ctx, models.ArtifactIdentifier{Reference: &manifestRef})
 	if err != nil {
-		s.logger.Debug("Manifest not found", "refKey", refKey, "error", err)
+		s.logger.Debug("Manifest not found", "ref", manifestRef.Name, "error", err)
 		return false, "", nil // Not found, not an error
 	}
 
-	// Extract digest from References (stored with Repo="digest")
-	digest := ""
-	for _, ref := range meta.References {
-		if ref.Repo == "digest" {
-			digest = ref.Name
-			break
-		}
-	}
-	if digest == "" {
-		return false, "", nil
-	}
-
-	// Verify the manifest actually exists
-	storageKey := s.getStorageKey(digest)
-	_, err = s.storage.GetMeta(ctx, models.ArtifactIdentifier{Hash: storageKey})
-	if err != nil {
-		return false, "", nil
-	}
-
+	// Return digest with sha256: prefix
+	digest := "sha256:" + meta.Hash
 	return true, digest, nil
 }
 
@@ -285,28 +267,36 @@ func (s *DockerRegistryPrivateService) PutManifest(ctx context.Context, name, re
 	s.logger.Debug("Calculated manifest digest", "digest", digest)
 	storageKey := s.getStorageKey(digest)
 
-	// Store manifest (content-addressable by digest)
-	ref := models.ArtifactReference{
-		Name:                name,
-		Repo:                "manifest",
+	// Create TWO references for the manifest:
+	// 1. Tag-specific reference: {repo}:{tag} - for pulling by tag
+	// 2. Generic repo reference: {repo} - for tracking which repos use this manifest
+	tagRef := models.ArtifactReference{
+		Name:                fmt.Sprintf("%s:%s", name, reference),
+		Registry:            s.registryAlias,
 		ReferencedTimestamp: time.Now().Unix(),
 	}
+	repoRef := models.ArtifactReference{
+		Name:                name,
+		Registry:            s.registryAlias,
+		ReferencedTimestamp: time.Now().Unix(),
+	}
+
 	meta := &models.ArtifactMeta{
 		Hash:             storageKey,
 		Length:           int64(len(data)),
 		CreatedTimestamp: time.Now().Unix(),
-		References:       []models.ArtifactReference{ref},
+		References:       []models.ArtifactReference{tagRef, repoRef},
 	}
 
-	// Store manifest data
+	// Store manifest data by hash (creates blob/ and both ref/ entries)
 	_, err := s.storage.CreateArtifact(ctx, models.ArtifactIdentifier{Hash: storageKey}, bytes.NewReader(data), int64(len(data)), meta)
 	if err != nil {
 		// If artifact exists (HashConflictError), merge references
 		if _, ok := err.(*models.HashConflictError); ok {
 			existingMeta, getErr := s.storage.GetMeta(ctx, models.ArtifactIdentifier{Hash: storageKey})
 			if getErr == nil {
-				// Merge references
-				existingMeta.References = append(existingMeta.References, ref)
+				// Merge both references
+				existingMeta.References = append(existingMeta.References, tagRef, repoRef)
 				_, updateErr := s.storage.UpdateMeta(ctx, *existingMeta)
 				if updateErr != nil {
 					return fmt.Errorf("failed to update manifest metadata: %w", updateErr)
@@ -314,48 +304,6 @@ func (s *DockerRegistryPrivateService) PutManifest(ctx context.Context, name, re
 			}
 		} else {
 			return fmt.Errorf("failed to store manifest: %w", err)
-		}
-	}
-
-	// Create reference mapping: name/reference -> digest
-	// Store the digest in the References field as a special reference
-	refKey := s.getManifestRefKey(name, reference)
-	// Store the digest in the reference mapping metadata
-	refData := []byte(digest) // Store digest as blob data
-	refMeta := &models.ArtifactMeta{
-		Hash:             refKey,
-		Length:           int64(len(refData)),
-		CreatedTimestamp: time.Now().Unix(),
-		// Store digest in References as a special reference with Repo="digest"
-		References: []models.ArtifactReference{
-			{
-				Name:                digest, // Store digest in Name field
-				Repo:                "digest",
-				ReferencedTimestamp: time.Now().Unix(),
-			},
-		},
-	}
-
-	// Store reference mapping with digest as blob data
-	_, err = s.storage.CreateArtifact(ctx, models.ArtifactIdentifier{Hash: refKey}, bytes.NewReader(refData), int64(len(refData)), refMeta)
-	if err != nil {
-		// If reference already exists, update it
-		existingRefMeta, getErr := s.storage.GetMeta(ctx, models.ArtifactIdentifier{Hash: refKey})
-		if getErr == nil {
-			// Update digest in References
-			existingRefMeta.References = []models.ArtifactReference{
-				{
-					Name:                digest,
-					Repo:                "digest",
-					ReferencedTimestamp: time.Now().Unix(),
-				},
-			}
-			_, updateErr := s.storage.UpdateMeta(ctx, *existingRefMeta)
-			if updateErr != nil {
-				return fmt.Errorf("failed to update manifest reference: %w", updateErr)
-			}
-		} else {
-			return fmt.Errorf("failed to create manifest reference: %w", err)
 		}
 	}
 
@@ -507,7 +455,7 @@ func (s *DockerRegistryPrivateService) PutBlob(ctx context.Context, name, digest
 	// Store blob while calculating digest simultaneously
 	ref := models.ArtifactReference{
 		Name:                name,
-		Repo:                "blob",
+		Registry:            s.registryAlias,
 		ReferencedTimestamp: time.Now().Unix(),
 	}
 	meta := &models.ArtifactMeta{

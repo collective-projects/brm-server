@@ -35,7 +35,7 @@ func NewDockerRegistryPrivate(
 	}
 
 	// Create service
-	service, err := NewDockerRegistryPrivateService(storageAlias, description)
+	service, err := NewDockerRegistryPrivateService(alias, storageAlias, description)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create registry service: %w", err)
 	}
