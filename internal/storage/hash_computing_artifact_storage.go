@@ -1,14 +1,12 @@
 package storage
 
 import (
-	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
 	"io"
 	"strings"
-	"time"
 
 	"github.com/collective-projects/brm-server/pkg/models"
 
@@ -58,45 +56,23 @@ func (h *HashComputingArtifactStorage) generateTempHash() string {
 	return "temp-" + id.String()
 }
 
-// cleanupTempHash removes a temporary artifact by adding a cleanup reference and then deleting it.
+// cleanupTempHash removes a temporary artifact.
 func (h *HashComputingArtifactStorage) cleanupTempHash(ctx context.Context, tempHash string) error {
 	// Check if temp artifact exists
 	tempID := models.ArtifactIdentifier{Hash: tempHash}
-	tempMeta, err := h.storage.GetMeta(ctx, tempID)
+	_, err := h.storage.GetMeta(ctx, tempID)
 	if err != nil {
 		// Already doesn't exist or error reading - nothing to clean up
 		return nil
 	}
 
-	// If no references exist, add a temporary one so we can delete it
-	if len(tempMeta.References) == 0 {
-		tempRef := models.ArtifactReference{
-			Name:                "temp-cleanup",
-			Registry:                "temp-cleanup",
-			ReferencedTimestamp: time.Now().Unix(),
-		}
-		tempMeta.References = []models.ArtifactReference{tempRef}
-		_, err = h.storage.UpdateMeta(ctx, *tempMeta)
-		if err != nil {
-			return fmt.Errorf("failed to add cleanup reference: %w", err)
-		}
-	}
-
-	// Find and delete the cleanup reference
-	cleanupRef := models.ArtifactReference{
-		Name: "temp-cleanup",
-		Registry: "temp-cleanup",
-	}
-	cleanupID := models.ArtifactIdentifier{
-		Hash:      tempHash,
-		Reference: &cleanupRef,
-	}
-	_, err = h.storage.DeleteArtifact(ctx, cleanupID)
+	// Delete the artifact (this will delete all references and move to trash)
+	err = h.storage.DeleteArtifact(ctx, tempID)
 	return err
 }
 
 // handleExistingHash handles the case where the computed hash already exists.
-// It cleans up the temp file and merges references if provided.
+// It cleans up the temp file and returns the existing metadata.
 func (h *HashComputingArtifactStorage) handleExistingHash(
 	ctx context.Context,
 	computedHash string,
@@ -106,7 +82,7 @@ func (h *HashComputingArtifactStorage) handleExistingHash(
 ) (*models.ArtifactMeta, error) {
 	// Cleanup temp file
 	if cleanupErr := h.cleanupTempHash(ctx, tempHash); cleanupErr != nil {
-		// Log cleanup error but continue with merge
+		// Log cleanup error but continue
 		// The temp file will be cleaned up later or remain in trash
 	}
 
@@ -117,14 +93,9 @@ func (h *HashComputingArtifactStorage) handleExistingHash(
 		return nil, fmt.Errorf("failed to get existing metadata: %w", err)
 	}
 
-	// Merge references if provided (follow normal Create behavior for existing artifacts)
-	if meta != nil && len(meta.References) > 0 {
-		mergeSize := existingMeta.Length
-		if tempMeta != nil {
-			mergeSize = tempMeta.Length
-		}
-		return h.storage.CreateArtifact(ctx, computedID, bytes.NewReader(nil), mergeSize, meta)
-	}
+	// The metadata file might have the wrong hash if it was created via hash computing
+	// and never corrected. Always ensure the returned metadata has the correct hash.
+	existingMeta.Hash = computedHash
 
 	return existingMeta, nil
 }
@@ -159,22 +130,18 @@ func (h *HashComputingArtifactStorage) moveToFinalHash(
 		return nil, fmt.Errorf("failed to move from temp to final hash: %w", err)
 	}
 
-	// Update metadata with computed hash
-	if tempMeta != nil {
-		tempMeta.Hash = computedHash
-		updatedMeta, err := h.storage.UpdateMeta(ctx, *tempMeta)
-		if err != nil {
-			// Metadata update failed, but file is already moved
-			// Try to get the metadata
-			computedID := models.ArtifactIdentifier{Hash: computedHash}
-			return h.storage.GetMeta(ctx, computedID)
-		}
-		return updatedMeta, nil
-	}
-
-	// Get final metadata
+	// Metadata file has been moved. Re-read it from the new location and correct the hash field.
 	computedID := models.ArtifactIdentifier{Hash: computedHash}
-	return h.storage.GetMeta(ctx, computedID)
+	finalMeta, err := h.storage.GetMeta(ctx, computedID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read metadata after move: %w", err)
+	}
+	
+	// The metadata file still contains the temp hash in its Hash field
+	// Correct it to the computed hash before returning
+	finalMeta.Hash = computedHash
+	
+	return finalMeta, nil
 }
 
 // CreateArtifact streams data from 'r' to storage.
@@ -235,7 +202,7 @@ func (h *HashComputingArtifactStorage) UpdateBlob(ctx context.Context, req model
 }
 
 // DeleteArtifact removes a specific reference to an artifact.
-func (h *HashComputingArtifactStorage) DeleteArtifact(ctx context.Context, id models.ArtifactIdentifier) (*models.ArtifactMeta, error) {
+func (h *HashComputingArtifactStorage) DeleteArtifact(ctx context.Context, id models.ArtifactIdentifier) error {
 	return h.storage.DeleteArtifact(ctx, id)
 }
 
@@ -244,7 +211,17 @@ func (h *HashComputingArtifactStorage) GetMeta(ctx context.Context, id models.Ar
 	return h.storage.GetMeta(ctx, id)
 }
 
-// UpdateMeta overwrites the metadata JSON file.
-func (h *HashComputingArtifactStorage) UpdateMeta(ctx context.Context, meta models.ArtifactMeta) (*models.ArtifactMeta, error) {
-	return h.storage.UpdateMeta(ctx, meta)
+// GetReference retrieves a specific reference by name and registry for an artifact.
+func (h *HashComputingArtifactStorage) GetReference(ctx context.Context, hash, name, registry string) (*models.ArtifactReference, error) {
+	return h.storage.GetReference(ctx, hash, name, registry)
+}
+
+// UpdateReference updates an existing reference.
+func (h *HashComputingArtifactStorage) UpdateReference(ctx context.Context, hash string, ref models.ArtifactReference) (*models.ArtifactReference, error) {
+	return h.storage.UpdateReference(ctx, hash, ref)
+}
+
+// ListReferenceHashes returns all reference hashes for an artifact.
+func (h *HashComputingArtifactStorage) ListReferenceHashes(ctx context.Context, hash string) ([]string, error) {
+	return h.storage.ListReferenceHashes(ctx, hash)
 }

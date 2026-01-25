@@ -8,9 +8,11 @@ import (
 
 // ArtifactReference represents a reference to an artifact by a specific name and registry
 type ArtifactReference struct {
-	Name                string `json:"name"`
-	Registry            string `json:"registry"`
-	ReferencedTimestamp int64  `json:"referencedTimestamp"`
+	Name                string            `json:"name"`
+	Registry            string            `json:"registry"`
+	ReferencedTimestamp int64             `json:"referencedTimestamp"`
+	Description         string            `json:"description,omitempty"` // Optional description for this reference
+	Tags                map[string]string `json:"tags,omitempty"`        // Custom key-value tags (keys max 128 chars, values max 1024 chars)
 }
 
 // ArtifactIdentifier identifies an artifact by hash and/or reference.
@@ -46,10 +48,9 @@ func (id ArtifactIdentifier) String() string {
 
 // ArtifactMeta holds metadata about an artifact
 type ArtifactMeta struct {
-	Hash             string              `json:"hash"`
-	Length           int64               `json:"length"`
-	CreatedTimestamp int64               `json:"createdTimestamp"` // When artifact data was first created
-	References       []ArtifactReference `json:"references"`       // List of references to this artifact
+	Hash             string `json:"hash"`
+	Length           int64  `json:"length"`
+	CreatedTimestamp int64  `json:"createdTimestamp"` // When artifact data was first created
 }
 
 // HashConflictError is returned when Create is called with a size that doesn't match an existing artifact
@@ -102,7 +103,6 @@ func (b *BaseStorage) GetStorageInfo() ArtifactStorageInfo {
 	}
 }
 
-
 // ArtifactStorage is the high-performance interface.
 type ArtifactStorage interface {
 	// CreateArtifact streams data from 'r' to storage.
@@ -128,21 +128,31 @@ type ArtifactStorage interface {
 
 	// DeleteArtifact removes a specific reference to an artifact.
 	// If id contains a reference, deletes that reference. If id only contains a hash, deletes all references.
-	// If no references remain, the artifact is moved to trash and nil is returned.
-	// If references remain, only the metadata is updated and the updated metadata is returned.
-	// Implementations are definitely expected to suport this method.
+	// If no references remain, the artifact is moved to trash.
+	// Implementations are definitely expected to support this method.
 	// Implementations should handle their thread-safety internally, if they are declared as thread-safe. Must be blocked if a Create operation is in progress.
-	DeleteArtifact(ctx context.Context, id ArtifactIdentifier) (*ArtifactMeta, error)
+	DeleteArtifact(ctx context.Context, id ArtifactIdentifier) error
 
 	// Meta operations
-	// Implementations are definitely expected to suport this method.
+	// Implementations are definitely expected to support this method.
 	GetMeta(ctx context.Context, id ArtifactIdentifier) (*ArtifactMeta, error)
 
-	// UpdateMeta updates the metadata for an artifact. Clients may need to store additional small info in metadata.
-	// Clients should not be changing implementation specific fields, like references, created timestamp, etc. These are managed by the storage implementation.
-	// Implementations are definitely expected to suport this method.
+	// Reference operations
+	// GetReference retrieves a specific reference by name and registry for an artifact.
+	// Implementations are definitely expected to support this method.
+	GetReference(ctx context.Context, hash, name, registry string) (*ArtifactReference, error)
+
+	// UpdateReference updates an existing reference. Only Description and Tags can be modified.
+	// Name and Registry fields are immutable and used for identification.
+	// Tag keys must be ≤128 chars, values ≤1024 chars.
+	// Implementations are definitely expected to support this method.
 	// Implementations should handle their thread-safety internally, if they are declared as thread-safe.
-	UpdateMeta(ctx context.Context, meta ArtifactMeta) (*ArtifactMeta, error)
+	UpdateReference(ctx context.Context, hash string, ref ArtifactReference) (*ArtifactReference, error)
+
+	// ListReferenceHashes returns all reference hashes (SHA256 of Registry::Name) for an artifact.
+	// This is more efficient than loading full reference data when only enumeration is needed.
+	// Implementations are definitely expected to support this method.
+	ListReferenceHashes(ctx context.Context, hash string) ([]string, error)
 
 	// GetStorageInfo returns information about the storage instance.
 	GetStorageInfo() ArtifactStorageInfo

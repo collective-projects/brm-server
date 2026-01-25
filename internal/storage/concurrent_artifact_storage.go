@@ -148,9 +148,8 @@ func (c *ConcurrentArtifactStorage) UpdateBlob(ctx context.Context, req models.A
 
 // DeleteArtifact removes a specific reference to an artifact with locking.
 // If id contains a reference, deletes that reference. If id only contains a hash, deletes all references.
-// If no references remain, the artifact is moved to trash and nil is returned.
-// If references remain, only the metadata is updated and the updated metadata is returned.
-func (c *ConcurrentArtifactStorage) DeleteArtifact(ctx context.Context, id models.ArtifactIdentifier) (*models.ArtifactMeta, error) {
+// If no references remain, the artifact is moved to trash.
+func (c *ConcurrentArtifactStorage) DeleteArtifact(ctx context.Context, id models.ArtifactIdentifier) error {
 	// Resolve identifier to hash for locking
 	var hash string
 	if id.HasHash() {
@@ -163,7 +162,7 @@ func (c *ConcurrentArtifactStorage) DeleteArtifact(ctx context.Context, id model
 
 	fileLock, err := c.acquireLock(ctx, hash)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	defer fileLock.Unlock()
 
@@ -176,15 +175,28 @@ func (c *ConcurrentArtifactStorage) GetMeta(ctx context.Context, id models.Artif
 	return c.storage.GetMeta(ctx, id)
 }
 
-// UpdateMeta overwrites the metadata JSON file with locking.
-func (c *ConcurrentArtifactStorage) UpdateMeta(ctx context.Context, meta models.ArtifactMeta) (*models.ArtifactMeta, error) {
-	fileLock, err := c.acquireLock(ctx, meta.Hash)
+// GetReference retrieves a specific reference by name and registry for an artifact.
+// Read operations don't require locking as they're read-only.
+func (c *ConcurrentArtifactStorage) GetReference(ctx context.Context, hash, name, registry string) (*models.ArtifactReference, error) {
+	return c.storage.GetReference(ctx, hash, name, registry)
+}
+
+// UpdateReference updates an existing reference with locking.
+// Only Description and Tags can be modified.
+func (c *ConcurrentArtifactStorage) UpdateReference(ctx context.Context, hash string, ref models.ArtifactReference) (*models.ArtifactReference, error) {
+	fileLock, err := c.acquireLock(ctx, hash)
 	if err != nil {
 		return nil, err
 	}
 	defer fileLock.Unlock()
 
-	return c.storage.UpdateMeta(ctx, meta)
+	return c.storage.UpdateReference(ctx, hash, ref)
+}
+
+// ListReferenceHashes returns all reference hashes for an artifact.
+// Read operations don't require locking as they're read-only.
+func (c *ConcurrentArtifactStorage) ListReferenceHashes(ctx context.Context, hash string) ([]string, error) {
+	return c.storage.ListReferenceHashes(ctx, hash)
 }
 
 // Move renames an artifact and its metadata to a new hash location with locking.

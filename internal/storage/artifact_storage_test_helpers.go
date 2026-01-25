@@ -26,13 +26,15 @@ func createTestMeta(hash, name, repo string, length int64) *models.ArtifactMeta 
 		Hash:             hash,
 		Length:           length,
 		CreatedTimestamp: now,
-		References: []models.ArtifactReference{
-			{
-				Name:                name,
-				Registry:                repo,
-				ReferencedTimestamp: now,
-			},
-		},
+	}
+}
+
+// Helper function to create a test reference
+func createTestReference(name, repo string) models.ArtifactReference {
+	return models.ArtifactReference{
+		Name:                name,
+		Registry:            repo,
+		ReferencedTimestamp: time.Now().Unix(),
 	}
 }
 
@@ -109,9 +111,10 @@ func testArtifactStorageCreate(t *testing.T, storage models.ArtifactStorage) {
 		hash := "xyz789uvw012"
 		testData := []byte("Test artifact data")
 		meta := createTestMeta(hash, "test-artifact", "docker:hub.docker.com", int64(len(testData)))
+		ref := createTestReference("test-artifact", "docker:hub.docker.com")
 		r := bytes.NewReader(testData)
 
-		createdMeta, err := storage.CreateArtifact(ctx, models.ArtifactIdentifier{Hash: hash}, r, int64(len(testData)), meta)
+		createdMeta, err := storage.CreateArtifact(ctx, models.ArtifactIdentifier{Hash: hash, Reference: &ref}, r, int64(len(testData)), meta)
 		if err != nil {
 			t.Fatalf("Create failed: %v", err)
 		}
@@ -125,12 +128,13 @@ func testArtifactStorageCreate(t *testing.T, storage models.ArtifactStorage) {
 			t.Fatalf("GetMeta failed: %v", err)
 		}
 
-		if len(retrievedMeta.References) == 0 {
-			t.Fatal("Expected at least one reference")
+		// Verify reference was created
+		retrievedRef, err := storage.GetReference(ctx, hash, "test-artifact", "docker:hub.docker.com")
+		if err != nil {
+			t.Fatalf("GetReference failed: %v", err)
 		}
-		ref := retrievedMeta.References[0]
-		if ref.Name != "test-artifact" {
-			t.Errorf("Expected name test-artifact, got %s", ref.Name)
+		if retrievedRef.Name != "test-artifact" {
+			t.Errorf("Expected name test-artifact, got %s", retrievedRef.Name)
 		}
 		if retrievedMeta.Hash != hash {
 			t.Errorf("Expected hash %s, got %s", hash, retrievedMeta.Hash)
@@ -531,31 +535,21 @@ func testArtifactStorageDelete(t *testing.T, storage models.ArtifactStorage) {
 			t.Fatalf("Setup failed: %v", err)
 		}
 
-		// Get a reference to delete (use first reference if available, or create one)
-		var ref models.ArtifactReference
-		if len(meta.References) > 0 {
-			ref = meta.References[0]
-		} else {
-			ref = models.ArtifactReference{
-				Name:                "test",
-				Registry:                "test",
-				ReferencedTimestamp: meta.CreatedTimestamp,
-			}
-			// Update metadata with reference first
-			meta.References = []models.ArtifactReference{ref}
-			_, err = storage.UpdateMeta(ctx, *meta)
-			if err != nil {
-				t.Fatalf("Failed to update metadata: %v", err)
-			}
+		// Create a reference to delete
+		ref := models.ArtifactReference{
+			Name:                "test",
+			Registry:            "test",
+			ReferencedTimestamp: meta.CreatedTimestamp,
+		}
+		// Create the reference
+		_, err = storage.CreateArtifact(ctx, models.ArtifactIdentifier{Hash: hash, Reference: &ref}, bytes.NewReader(nil), int64(len(testData)), meta)
+		if err != nil {
+			t.Fatalf("Failed to create reference: %v", err)
 		}
 
-		deletedMeta, err := storage.DeleteArtifact(ctx, models.ArtifactIdentifier{Hash: hash, Reference: &ref})
+		err = storage.DeleteArtifact(ctx, models.ArtifactIdentifier{Hash: hash, Reference: &ref})
 		if err != nil {
 			t.Fatalf("Delete failed: %v", err)
-		}
-		// Should return nil when artifact is moved to trash (no references remain)
-		if deletedMeta != nil {
-			t.Error("Expected nil metadata when artifact is moved to trash")
 		}
 
 		// Verify deletion
@@ -578,7 +572,7 @@ func testArtifactStorageDelete(t *testing.T, storage models.ArtifactStorage) {
 			Registry:                "test",
 			ReferencedTimestamp: time.Now().Unix(),
 		}
-		_, err := storage.DeleteArtifact(ctx, models.ArtifactIdentifier{Hash: "nonexistent", Reference: &ref})
+		err := storage.DeleteArtifact(ctx, models.ArtifactIdentifier{Hash: "nonexistent", Reference: &ref})
 		if err == nil {
 			t.Error("Delete should error for nonexistent artifact")
 		}
@@ -588,23 +582,15 @@ func testArtifactStorageDelete(t *testing.T, storage models.ArtifactStorage) {
 		hash := "deletetest2"
 		testData := []byte("test data")
 		meta := createTestMeta(hash, "test", "docker:test", int64(len(testData)))
-		createdMeta, err := storage.CreateArtifact(ctx, models.ArtifactIdentifier{Hash: hash}, bytes.NewReader(testData), int64(len(testData)), meta)
+		ref := createTestReference("test", "docker:test")
+		_, err := storage.CreateArtifact(ctx, models.ArtifactIdentifier{Hash: hash, Reference: &ref}, bytes.NewReader(testData), int64(len(testData)), meta)
 		if err != nil {
 			t.Fatalf("Setup failed: %v", err)
 		}
 
-		if len(createdMeta.References) == 0 {
-			t.Fatal("Expected at least one reference")
-		}
-		ref := createdMeta.References[0]
-
-		deletedMeta, err := storage.DeleteArtifact(ctx, models.ArtifactIdentifier{Hash: hash, Reference: &ref})
+		err = storage.DeleteArtifact(ctx, models.ArtifactIdentifier{Hash: hash, Reference: &ref})
 		if err != nil {
 			t.Fatalf("Delete failed: %v", err)
-		}
-		// Should return nil when artifact is moved to trash (no references remain)
-		if deletedMeta != nil {
-			t.Error("Expected nil metadata when artifact is moved to trash")
 		}
 
 		// Verify metadata is also deleted
@@ -623,7 +609,8 @@ func testArtifactStorageGetMeta(t *testing.T, storage models.ArtifactStorage) {
 		hash := "metatest1"
 		testData := []byte("test")
 		meta := createTestMeta(hash, "test-artifact", "docker:hub.docker.com", int64(len(testData)))
-		_, err := storage.CreateArtifact(ctx, models.ArtifactIdentifier{Hash: hash}, bytes.NewReader(testData), int64(len(testData)), meta)
+		ref := createTestReference("test-artifact", "docker:hub.docker.com")
+		_, err := storage.CreateArtifact(ctx, models.ArtifactIdentifier{Hash: hash, Reference: &ref}, bytes.NewReader(testData), int64(len(testData)), meta)
 		if err != nil {
 			t.Fatalf("Setup failed: %v", err)
 		}
@@ -633,18 +620,19 @@ func testArtifactStorageGetMeta(t *testing.T, storage models.ArtifactStorage) {
 			t.Fatalf("GetMeta failed: %v", err)
 		}
 
-		if len(retrievedMeta.References) == 0 {
-			t.Fatal("Expected at least one reference")
+		// Verify reference was created
+		retrievedRef, err := storage.GetReference(ctx, hash, "test-artifact", "docker:hub.docker.com")
+		if err != nil {
+			t.Fatalf("GetReference failed: %v", err)
 		}
-		ref := retrievedMeta.References[0]
-		if ref.Name != "test-artifact" {
-			t.Errorf("Expected name test-artifact, got %s", ref.Name)
+		if retrievedRef.Name != "test-artifact" {
+			t.Errorf("Expected name test-artifact, got %s", retrievedRef.Name)
 		}
 		if retrievedMeta.Hash != hash {
 			t.Errorf("Expected hash %s, got %s", hash, retrievedMeta.Hash)
 		}
-		if ref.Registry != "docker:hub.docker.com" {
-			t.Errorf("Expected repo docker:hub.docker.com, got %s", ref.Registry)
+		if retrievedRef.Registry != "docker:hub.docker.com" {
+			t.Errorf("Expected repo docker:hub.docker.com, got %s", retrievedRef.Registry)
 		}
 		if retrievedMeta.Length != meta.Length {
 			t.Errorf("Expected length %d, got %d", meta.Length, retrievedMeta.Length)
@@ -659,12 +647,12 @@ func testArtifactStorageGetMeta(t *testing.T, storage models.ArtifactStorage) {
 	})
 }
 
-// testArtifactStorageUpdateMeta tests the UpdateMeta method
-func testArtifactStorageUpdateMeta(t *testing.T, storage models.ArtifactStorage) {
+// testArtifactStorageUpdateReference tests the UpdateReference method
+func testArtifactStorageUpdateReference(t *testing.T, storage models.ArtifactStorage) {
 	ctx := context.Background()
 
-	t.Run("update_existing_metadata", func(t *testing.T) {
-		hash := "metatest2"
+	t.Run("update_existing_reference", func(t *testing.T) {
+		hash := "reftest1"
 		testData := []byte("test")
 		initialMeta := createTestMeta(hash, "initial", "docker:test", int64(len(testData)))
 		_, err := storage.CreateArtifact(ctx, models.ArtifactIdentifier{Hash: hash}, bytes.NewReader(testData), int64(len(testData)), initialMeta)
@@ -672,71 +660,30 @@ func testArtifactStorageUpdateMeta(t *testing.T, storage models.ArtifactStorage)
 			t.Fatalf("Setup failed: %v", err)
 		}
 
-		now := time.Now().Unix()
-		updatedMeta := models.ArtifactMeta{
-			Hash:             hash,
-			Length:           int64(len(testData)),
-			CreatedTimestamp: now,
-			References: []models.ArtifactReference{
-				{
-					Name:                "updated",
-					Registry:                "docker:updated",
-					ReferencedTimestamp: now,
-				},
-			},
-		}
-
-		result, err := storage.UpdateMeta(ctx, updatedMeta)
+		// Create a reference
+		ref := createTestReference("test-ref", "docker:test")
+		_, err = storage.CreateArtifact(ctx, models.ArtifactIdentifier{Hash: hash, Reference: &ref}, bytes.NewReader(nil), int64(len(testData)), initialMeta)
 		if err != nil {
-			t.Fatalf("UpdateMeta failed: %v", err)
+			t.Fatalf("Failed to create reference: %v", err)
 		}
 
-		if len(result.References) == 0 {
-			t.Fatal("Expected at least one reference")
-		}
-		ref := result.References[0]
-		if ref.Name != "updated" {
-			t.Errorf("Expected name updated, got %s", ref.Name)
-		}
-		if ref.Registry != "docker:updated" {
-			t.Errorf("Expected repo docker:updated, got %s", ref.Registry)
-		}
-	})
+		// Update the reference
+		ref.Description = "Updated description"
+		ref.Tags = map[string]string{"env": "test", "version": "1.0"}
 
-	t.Run("create_new_metadata", func(t *testing.T) {
-		hash := "metatest3"
-		testData := []byte("test")
-		// Create artifact without metadata
-		_, err := storage.CreateArtifact(ctx, models.ArtifactIdentifier{Hash: hash}, bytes.NewReader(testData), int64(len(testData)), nil)
+		result, err := storage.UpdateReference(ctx, hash, ref)
 		if err != nil {
-			t.Fatalf("Setup failed: %v", err)
+			t.Fatalf("UpdateReference failed: %v", err)
 		}
 
-		now := time.Now().Unix()
-		newMeta := models.ArtifactMeta{
-			Hash:             hash,
-			Length:           int64(len(testData)),
-			CreatedTimestamp: now,
-			References: []models.ArtifactReference{
-				{
-					Name:                "new",
-					Registry:                "docker:new",
-					ReferencedTimestamp: now,
-				},
-			},
+		if result.Description != "Updated description" {
+			t.Errorf("Expected description 'Updated description', got %s", result.Description)
 		}
-
-		result, err := storage.UpdateMeta(ctx, newMeta)
-		if err != nil {
-			t.Fatalf("UpdateMeta failed: %v", err)
+		if result.Tags["env"] != "test" {
+			t.Errorf("Expected tag env=test, got %s", result.Tags["env"])
 		}
-
-		if len(result.References) == 0 {
-			t.Fatal("Expected at least one reference")
-		}
-		ref := result.References[0]
-		if ref.Name != "new" {
-			t.Errorf("Expected name new, got %s", ref.Name)
+		if result.Tags["version"] != "1.0" {
+			t.Errorf("Expected tag version=1.0, got %s", result.Tags["version"])
 		}
 	})
 }
@@ -803,23 +750,16 @@ func testArtifactStorageFullWorkflow(t *testing.T, storage models.ArtifactStorag
 		t.Fatalf("Update failed: %v", err)
 	}
 
-	// 5. Update metadata
+	// 5. Add a new reference
 	now := time.Now().Unix()
-	updatedMeta := models.ArtifactMeta{
-		Hash:             hash,
-		Length:           int64(len(testData)),         // Original length (Update doesn't truncate)
-		CreatedTimestamp: createdMeta.CreatedTimestamp, // Preserve original
-		References: []models.ArtifactReference{
-			{
-				Name:                "updated-workflow",
-				Registry:                "docker:updated",
-				ReferencedTimestamp: now,
-			},
-		},
+	newRef := models.ArtifactReference{
+		Name:                "updated-workflow",
+		Registry:            "docker:updated",
+		ReferencedTimestamp: now,
 	}
-	_, err = storage.UpdateMeta(ctx, updatedMeta)
+	_, err = storage.CreateArtifact(ctx, models.ArtifactIdentifier{Hash: hash, Reference: &newRef}, bytes.NewReader(nil), int64(len(testData)), createdMeta)
 	if err != nil {
-		t.Fatalf("UpdateMeta failed: %v", err)
+		t.Fatalf("Failed to add reference: %v", err)
 	}
 
 	// 6. Read updated artifact
@@ -834,27 +774,19 @@ func testArtifactStorageFullWorkflow(t *testing.T, storage models.ArtifactStorag
 	copy(expectedUpdated[len(updateData):], testData[len(updateData):])
 	verifyData(t, updatedReadData, expectedUpdated)
 
-	// 7. Verify updated metadata
-	retrievedMeta, err := storage.GetMeta(ctx, models.ArtifactIdentifier{Hash: hash})
+	// 7. Verify reference was added
+	retrievedRef, err := storage.GetReference(ctx, hash, "updated-workflow", "docker:updated")
 	if err != nil {
-		t.Fatalf("GetMeta failed: %v", err)
+		t.Fatalf("GetReference failed: %v", err)
 	}
-	if len(retrievedMeta.References) == 0 {
-		t.Fatal("Expected at least one reference")
-	}
-	ref := retrievedMeta.References[0]
-	if ref.Name != "updated-workflow" {
-		t.Errorf("Expected name updated-workflow, got %s", ref.Name)
+	if retrievedRef.Name != "updated-workflow" {
+		t.Errorf("Expected name updated-workflow, got %s", retrievedRef.Name)
 	}
 
 	// 8. Delete artifact
-	deletedMeta, err := storage.DeleteArtifact(ctx, models.ArtifactIdentifier{Hash: hash, Reference: &ref})
+	err = storage.DeleteArtifact(ctx, models.ArtifactIdentifier{Hash: hash, Reference: &newRef})
 	if err != nil {
 		t.Fatalf("Delete failed: %v", err)
-	}
-	// Should return nil when artifact is moved to trash (no references remain)
-	if deletedMeta != nil {
-		t.Error("Expected nil metadata when artifact is moved to trash")
 	}
 
 	// 9. Verify deletion

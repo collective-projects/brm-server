@@ -77,11 +77,6 @@ func TestArtifactStorageGetMeta(t *testing.T) {
 	testArtifactStorageGetMeta(t, storage)
 }
 
-func TestArtifactStorageUpdateMeta(t *testing.T) {
-	storage, _ := setupTestStorage(t)
-	testArtifactStorageUpdateMeta(t, storage)
-}
-
 func TestArtifactStorageFullWorkflow(t *testing.T) {
 	storage, _ := setupTestStorage(t)
 	testArtifactStorageFullWorkflow(t, storage)

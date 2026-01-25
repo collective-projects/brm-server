@@ -83,6 +83,7 @@ func (rm *RegistryManager) init() {
 			}
 		}
 
+		// return nil, fmt.Errorf("proxy.NewDockerRegistryProxy not implemented") // Placeholder
 		return proxy.NewDockerRegistryProxy(alias, storageAlias, upstream, serviceBinding, cacheTTL)
 	})
 

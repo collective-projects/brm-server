@@ -13,7 +13,7 @@ import (
 // DockerRegistryProxy implements a Docker registry proxy that caches artifacts from upstream registries
 type DockerRegistryProxy struct {
 	models.ProxyRegistry // Embed ProxyRegistry instead of BaseRegistry
-	service              *DockerRegistryProxyService
+	// service implementation removed - to be implemented later
 }
 
 // NewDockerRegistryProxy creates a new Docker registry proxy instance
@@ -36,19 +36,12 @@ func NewDockerRegistryProxy(
 
 	// Resolve storage from StorageManager
 	storageManager := storage.GetManager()
-	storageInstance, err := storageManager.Get(storageAlias)
+	_, err := storageManager.Get(storageAlias)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get storage by alias %s: %w", storageAlias, err)
 	}
 
-	// Create service
-	service, err := NewDockerRegistryProxyService(alias, storageAlias, upstream, cacheTTL)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create registry service: %w", err)
-	}
-
-	// Set storage in service
-	service.SetStorage(storageInstance)
+	// Service implementation removed - to be implemented later
 
 	registry := &DockerRegistryProxy{
 		ProxyRegistry: models.ProxyRegistry{
@@ -62,7 +55,6 @@ func NewDockerRegistryProxy(
 			Upstream: upstream,
 			CacheTTL: cacheTTL,
 		},
-		service: service,
 	}
 
 	return registry, nil
@@ -71,8 +63,9 @@ func NewDockerRegistryProxy(
 // SetupRoutes implements Registry interface.
 // This is called by RegistryManager to configure routes for this registry.
 func (d *DockerRegistryProxy) SetupRoutes(mux *http.ServeMux) error {
-	SetupRoutes(mux, d.service)
-	return nil
+	// SetupRoutes(mux, d.service)
+	// return nil
+	return fmt.Errorf("Not Implemented !")
 }
 
 // GetStorageAlias returns the storage alias

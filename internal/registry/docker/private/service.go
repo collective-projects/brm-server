@@ -143,9 +143,10 @@ func (s *DockerRegistryPrivateService) GetManifest(ctx context.Context, name, re
 	s.logger.Debug("GetManifest called", "name", name, "reference", reference)
 
 	// Look up the manifest by reference (uses ref/ folder internally)
+	// Match the naming used in PutManifest: "{repo}:{tag}"
 	manifestRef := models.ArtifactReference{
-		Name:     fmt.Sprintf("manifest:%s:%s", name, reference),
-		Registry: s.description,
+		Name:     fmt.Sprintf("%s:%s", name, reference),
+		Registry: s.registryAlias,
 	}
 
 	// Get metadata to resolve reference to hash
@@ -285,25 +286,34 @@ func (s *DockerRegistryPrivateService) PutManifest(ctx context.Context, name, re
 		Hash:             storageKey,
 		Length:           int64(len(data)),
 		CreatedTimestamp: time.Now().Unix(),
-		References:       []models.ArtifactReference{tagRef, repoRef},
 	}
 
-	// Store manifest data by hash (creates blob/ and both ref/ entries)
+	// Store manifest data by hash
+	// First, create with the hash to store the blob
 	_, err := s.storage.CreateArtifact(ctx, models.ArtifactIdentifier{Hash: storageKey}, bytes.NewReader(data), int64(len(data)), meta)
 	if err != nil {
-		// If artifact exists (HashConflictError), merge references
-		if _, ok := err.(*models.HashConflictError); ok {
-			existingMeta, getErr := s.storage.GetMeta(ctx, models.ArtifactIdentifier{Hash: storageKey})
-			if getErr == nil {
-				// Merge both references
-				existingMeta.References = append(existingMeta.References, tagRef, repoRef)
-				_, updateErr := s.storage.UpdateMeta(ctx, *existingMeta)
-				if updateErr != nil {
-					return fmt.Errorf("failed to update manifest metadata: %w", updateErr)
-				}
-			}
-		} else {
+		if _, ok := err.(*models.HashConflictError); !ok {
 			return fmt.Errorf("failed to store manifest: %w", err)
+		}
+		// Hash conflict is OK, artifact already exists
+	}
+
+	// Create both reference links by calling CreateArtifact with each reference
+	// This adds the references to the metaref/ folder
+	// Use -1 for size since artifact already exists (skips length validation)
+	for _, ref := range []models.ArtifactReference{tagRef, repoRef} {
+		refMeta := &models.ArtifactMeta{
+			Hash:             storageKey,
+			Length:           int64(len(data)),
+			CreatedTimestamp: time.Now().Unix(),
+		}
+		refID := models.ArtifactIdentifier{
+			Hash:      storageKey,
+			Reference: &ref,
+		}
+		_, err := s.storage.CreateArtifact(ctx, refID, nil, -1, refMeta)
+		if err != nil {
+			return fmt.Errorf("failed to create reference %s::%s: %w", ref.Registry, ref.Name, err)
 		}
 	}
 
@@ -462,39 +472,36 @@ func (s *DockerRegistryPrivateService) PutBlob(ctx context.Context, name, digest
 		Hash:             storageKey,
 		Length:           size,
 		CreatedTimestamp: time.Now().Unix(),
-		References:       []models.ArtifactReference{ref},
 	}
 
+	// Create artifact with hash first (stores the blob)
 	_, err := s.storage.CreateArtifact(ctx, models.ArtifactIdentifier{Hash: storageKey}, teeReader, size, meta)
 	if err != nil {
-		// If artifact exists (HashConflictError), merge references
-		if _, ok := err.(*models.HashConflictError); ok {
-			existingMeta, getErr := s.storage.GetMeta(ctx, models.ArtifactIdentifier{Hash: storageKey})
-			if getErr == nil {
-				// Merge references
-				existingMeta.References = append(existingMeta.References, ref)
-				_, updateErr := s.storage.UpdateMeta(ctx, *existingMeta)
-				if updateErr != nil {
-					return fmt.Errorf("failed to update blob metadata: %w", updateErr)
-				}
-			}
-			// Verify digest matches
-			calculatedDigest := "sha256:" + hex.EncodeToString(hasher.Sum(nil))
-			if calculatedDigest != digest {
-				return fmt.Errorf("digest mismatch: expected %s, got %s", digest, calculatedDigest)
-			}
-			return nil
+		if _, ok := err.(*models.HashConflictError); !ok {
+			return fmt.Errorf("failed to store blob: %w", err)
 		}
-		return fmt.Errorf("failed to store blob: %w", err)
+		// Hash conflict is OK, verify digest and continue to add reference
 	}
 
-	// Validate digest after storage
+	// Verify digest matches
 	calculatedDigest := "sha256:" + hex.EncodeToString(hasher.Sum(nil))
 	if calculatedDigest != digest {
-		// Clean up: delete the artifact we just created
-		// Note: This is a best-effort cleanup
-		_, _ = s.storage.DeleteArtifact(ctx, models.ArtifactIdentifier{Hash: storageKey, Reference: &ref})
 		return fmt.Errorf("digest mismatch: expected %s, got %s", digest, calculatedDigest)
+	}
+
+	// Create reference link by calling CreateArtifact with the reference
+	refID := models.ArtifactIdentifier{
+		Hash:      storageKey,
+		Reference: &ref,
+	}
+	refMeta := &models.ArtifactMeta{
+		Hash:             storageKey,
+		Length:           size,
+		CreatedTimestamp: time.Now().Unix(),
+	}
+	_, err = s.storage.CreateArtifact(ctx, refID, bytes.NewReader(nil), size, refMeta)
+	if err != nil {
+		return fmt.Errorf("failed to create reference %s::%s: %w", ref.Registry, ref.Name, err)
 	}
 
 	return nil

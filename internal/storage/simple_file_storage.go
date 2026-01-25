@@ -72,6 +72,21 @@ func (s *SimpleFileStorage) getRefPath(refHash string) (dir, refPath string) {
 	return
 }
 
+// getMetaRefPaths returns the directory and file path for a reference within an artifact's metaref folder.
+// Structure: metaref/{hash[:2]}/{hash[2:]}/{refHash}
+func (s *SimpleFileStorage) getMetaRefPaths(hash, refHash string) (dir, refFilePath string) {
+	if len(hash) < 2 {
+		dir = filepath.Join(s.baseDir, "metaref", hash)
+		refFilePath = filepath.Join(dir, refHash)
+	} else {
+		subDir := hash[:2]
+		fileName := hash[2:]
+		dir = filepath.Join(s.baseDir, "metaref", subDir, fileName)
+		refFilePath = filepath.Join(dir, refHash)
+	}
+	return
+}
+
 // getTrashPath returns the trash directory path for a given hash using git-like structure.
 func (s *SimpleFileStorage) getTrashPath(hash string) (dir, blobPath, metaPath string) {
 	if len(hash) < 2 {
@@ -133,41 +148,76 @@ func (s *SimpleFileStorage) deleteRef(ref *models.ArtifactReference) error {
 	return err
 }
 
-// mergeReferences merges new references into existing references, deduplicating by Name+Registry.
-// If a reference with the same Name+Registry exists, updates ReferencedTimestamp to the latest.
-func mergeReferences(existing, new []models.ArtifactReference) []models.ArtifactReference {
-	result := make([]models.ArtifactReference, 0, len(existing)+len(new))
-	refMap := make(map[string]int) // key: "name:registry", value: index in result
-
-	// Add existing references to map
-	for _, ref := range existing {
-		key := ref.Name + ":" + ref.Registry
-		if idx, exists := refMap[key]; exists {
-			// Update timestamp if new one is later
-			if ref.ReferencedTimestamp > result[idx].ReferencedTimestamp {
-				result[idx].ReferencedTimestamp = ref.ReferencedTimestamp
-			}
-		} else {
-			result = append(result, ref)
-			refMap[key] = len(result) - 1
+// createOrUpdateMetaRefFile creates or updates a reference file in the metaref folder.
+// Validates tag constraints: keys ≤128 chars, values ≤1024 chars.
+func (s *SimpleFileStorage) createOrUpdateMetaRefFile(hash string, ref *models.ArtifactReference) error {
+	// Validate tags
+	for key, value := range ref.Tags {
+		if len(key) > 128 {
+			return fmt.Errorf("tag key exceeds 128 characters: %s", key)
+		}
+		if len(value) > 1024 {
+			return fmt.Errorf("tag value exceeds 1024 characters for key %s", key)
 		}
 	}
 
-	// Add new references
-	for _, ref := range new {
-		key := ref.Name + ":" + ref.Registry
-		if idx, exists := refMap[key]; exists {
-			// Update timestamp if new one is later
-			if ref.ReferencedTimestamp > result[idx].ReferencedTimestamp {
-				result[idx].ReferencedTimestamp = ref.ReferencedTimestamp
-			}
-		} else {
-			result = append(result, ref)
-			refMap[key] = len(result) - 1
+	refHash := computeReferenceHash(ref)
+	refDir, refFilePath := s.getMetaRefPaths(hash, refHash)
+
+	if err := os.MkdirAll(refDir, 0755); err != nil {
+		return fmt.Errorf("failed to create metaref directory: %w", err)
+	}
+
+	f, err := os.Create(refFilePath)
+	if err != nil {
+		return fmt.Errorf("failed to create metaref file: %w", err)
+	}
+	defer f.Close()
+
+	if err := json.NewEncoder(f).Encode(ref); err != nil {
+		return fmt.Errorf("failed to encode reference: %w", err)
+	}
+
+	return nil
+}
+
+// deleteMetaRefFile removes a reference file from the metaref folder and cleans up empty directories.
+func (s *SimpleFileStorage) deleteMetaRefFile(hash string, ref *models.ArtifactReference) error {
+	refHash := computeReferenceHash(ref)
+	refDir, refFilePath := s.getMetaRefPaths(hash, refHash)
+
+	err := os.Remove(refFilePath)
+	if err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("failed to remove metaref file: %w", err)
+	}
+
+	// Try to clean up empty directory
+	_ = os.Remove(refDir)
+
+	return nil
+}
+
+// listMetaRefFiles returns all reference hashes for an artifact.
+func (s *SimpleFileStorage) listMetaRefFiles(hash string) ([]string, error) {
+	refDir, _ := s.getMetaRefPaths(hash, "")
+	// refDir already points to the directory containing all ref files for this hash
+
+	entries, err := os.ReadDir(refDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return []string{}, nil // No references
+		}
+		return nil, fmt.Errorf("failed to read metaref directory: %w", err)
+	}
+
+	var refHashes []string
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			refHashes = append(refHashes, entry.Name())
 		}
 	}
 
-	return result
+	return refHashes, nil
 }
 
 // moveToTrash moves an artifact and its metadata to the trash directory.
@@ -194,27 +244,58 @@ func (s *SimpleFileStorage) moveToTrash(ctx context.Context, hash string) error 
 		return fmt.Errorf("failed to move metadata to trash: %w", err)
 	}
 
+	// Move metaref folder (if it exists)
+	_, srcMetaRefDir := s.getMetaRefPaths(hash, "")
+	srcMetaRefDir = filepath.Dir(srcMetaRefDir) // Get the directory containing all ref files
+	if _, err := os.Stat(srcMetaRefDir); err == nil {
+		// Metaref directory exists, move it
+		var destMetaRefDir string
+		if len(hash) < 2 {
+			destMetaRefDir = filepath.Join(s.baseDir, ".trash", "metaref", hash)
+		} else {
+			subDir := hash[:2]
+			fileName := hash[2:]
+			destMetaRefDir = filepath.Join(s.baseDir, ".trash", "metaref", subDir, fileName)
+		}
+		parentDir := filepath.Dir(destMetaRefDir)
+		if err := os.MkdirAll(parentDir, 0755); err != nil {
+			return fmt.Errorf("failed to create trash metaref directory: %w", err)
+		}
+		if err := os.Rename(srcMetaRefDir, destMetaRefDir); err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("failed to move metaref to trash: %w", err)
+		}
+	}
+
 	return nil
 }
 
 // CreateArtifact stores the artifact and optional metadata.
-// If artifact already exists, validates length and merges references without writing data.
+// If artifact already exists, validates length and adds new references atomically.
+// References are stored in metaref/ folder, not in metadata.
 func (s *SimpleFileStorage) CreateArtifact(ctx context.Context, id models.ArtifactIdentifier, r io.Reader, size int64, meta *models.ArtifactMeta) (*models.ArtifactMeta, error) {
 	// Resolve identifier to hash
 	var hash string
+	var newReferences []models.ArtifactReference
+
 	if id.HasHash() {
 		hash = id.Hash
+		// If a reference is also provided, include it in new references
+		if id.HasReference() {
+			newReferences = append(newReferences, *id.Reference)
+		}
 	} else if id.HasReference() {
 		// For new artifacts with reference, we need the hash from metadata
 		if meta == nil || meta.Hash == "" {
 			return nil, fmt.Errorf("creating artifact by reference requires metadata with hash")
 		}
 		hash = meta.Hash
+		// Add the reference from identifier to new references
+		newReferences = append(newReferences, *id.Reference)
 	} else {
 		return nil, fmt.Errorf("invalid identifier")
 	}
 
-	//check if both id.hash and meta.hash are present, they match
+	// Check if both id.hash and meta.hash are present, they match
 	if id.HasHash() && meta != nil && meta.Hash != "" && id.Hash != meta.Hash {
 		return nil, fmt.Errorf("hash mismatch between identifier and metadata")
 	}
@@ -230,7 +311,7 @@ func (s *SimpleFileStorage) CreateArtifact(ctx context.Context, id models.Artifa
 	}
 
 	if artifactExists {
-		// Artifact exists: read existing metadata, validate length, merge references
+		// Artifact exists: read existing metadata, validate length, add new references
 		existingMeta, err := s.GetMeta(ctx, id)
 		if err != nil && !os.IsNotExist(err) {
 			return nil, fmt.Errorf("failed to read existing metadata: %w", err)
@@ -246,7 +327,6 @@ func (s *SimpleFileStorage) CreateArtifact(ctx context.Context, id models.Artifa
 				Hash:             hash,
 				Length:           stat.Size(),
 				CreatedTimestamp: stat.ModTime().Unix(),
-				References:       []models.ArtifactReference{},
 			}
 		}
 
@@ -259,32 +339,17 @@ func (s *SimpleFileStorage) CreateArtifact(ctx context.Context, id models.Artifa
 			}
 		}
 
-		// Merge references if meta is provided
-		if meta != nil && len(meta.References) > 0 {
-			existingMeta.References = mergeReferences(existingMeta.References, meta.References)
-
-			// Create/update reference links for new references
-			for _, ref := range meta.References {
-				if err := s.createOrUpdateRef(&ref, hash); err != nil {
-					return nil, fmt.Errorf("failed to create reference link: %w", err)
-				}
+		// Add new references to metaref/ folder
+		// Atomically create/update reference files for each new reference
+		for _, ref := range newReferences {
+			// Create ref lookup file
+			if err := s.createOrUpdateRef(&ref, hash); err != nil {
+				return nil, fmt.Errorf("failed to create reference link: %w", err)
 			}
-		}
-
-		// Update metadata file
-		metaDir := filepath.Dir(metaPath)
-		if err := os.MkdirAll(metaDir, 0755); err != nil {
-			return nil, fmt.Errorf("failed to create meta subdirectory: %w", err)
-		}
-
-		metaFile, err := os.Create(metaPath)
-		if err != nil {
-			return nil, fmt.Errorf("failed to create metadata file: %w", err)
-		}
-		defer metaFile.Close()
-
-		if err := json.NewEncoder(metaFile).Encode(existingMeta); err != nil {
-			return nil, fmt.Errorf("failed to encode metadata: %w", err)
+			// Create metaref file with full reference data
+			if err := s.createOrUpdateMetaRefFile(hash, &ref); err != nil {
+				return nil, fmt.Errorf("failed to create metaref file: %w", err)
+			}
 		}
 
 		return existingMeta, nil
@@ -313,7 +378,7 @@ func (s *SimpleFileStorage) CreateArtifact(ctx context.Context, id models.Artifa
 	}
 	fileSize := stat.Size()
 
-	// 2. Create metadata
+	// 2. Create metadata (without references)
 	var finalMeta *models.ArtifactMeta
 	if meta != nil {
 		// Use provided metadata, but ensure it has the correct hash and length
@@ -321,7 +386,6 @@ func (s *SimpleFileStorage) CreateArtifact(ctx context.Context, id models.Artifa
 			Hash:             hash,
 			Length:           fileSize,
 			CreatedTimestamp: meta.CreatedTimestamp,
-			References:       meta.References,
 		}
 		// If no CreatedTimestamp provided, use current time
 		if finalMeta.CreatedTimestamp == 0 {
@@ -333,18 +397,10 @@ func (s *SimpleFileStorage) CreateArtifact(ctx context.Context, id models.Artifa
 			Hash:             hash,
 			Length:           fileSize,
 			CreatedTimestamp: stat.ModTime().Unix(),
-			References:       []models.ArtifactReference{},
 		}
 	}
 
-	// 3. Create reference links
-	for _, ref := range finalMeta.References {
-		if err := s.createOrUpdateRef(&ref, hash); err != nil {
-			return nil, fmt.Errorf("failed to create reference link: %w", err)
-		}
-	}
-
-	// 4. Write Metadata
+	// 3. Write Metadata (before references for atomicity)
 	metaDir := filepath.Dir(metaPath)
 	if err := os.MkdirAll(metaDir, 0755); err != nil {
 		return nil, fmt.Errorf("failed to create meta subdirectory: %w", err)
@@ -358,6 +414,18 @@ func (s *SimpleFileStorage) CreateArtifact(ctx context.Context, id models.Artifa
 
 	if err := json.NewEncoder(metaFile).Encode(finalMeta); err != nil {
 		return nil, fmt.Errorf("failed to encode metadata: %w", err)
+	}
+
+	// 4. Create reference links and metaref files atomically
+	for _, ref := range newReferences {
+		// Create ref lookup file
+		if err := s.createOrUpdateRef(&ref, hash); err != nil {
+			return nil, fmt.Errorf("failed to create reference link: %w", err)
+		}
+		// Create metaref file with full reference data
+		if err := s.createOrUpdateMetaRefFile(hash, &ref); err != nil {
+			return nil, fmt.Errorf("failed to create metaref file: %w", err)
+		}
 	}
 
 	return finalMeta, nil
@@ -452,89 +520,80 @@ func (s *SimpleFileStorage) UpdateBlob(ctx context.Context, req models.ArtifactR
 
 // DeleteArtifact removes a specific reference to an artifact.
 // If id contains a reference, deletes that reference. If id only contains a hash, deletes all references.
-// If no references remain, the artifact is moved to trash and nil is returned.
-// If references remain, only the metadata is updated and the updated metadata is returned.
-func (s *SimpleFileStorage) DeleteArtifact(ctx context.Context, id models.ArtifactIdentifier) (*models.ArtifactMeta, error) {
+// If no references remain, the artifact is moved to trash.
+func (s *SimpleFileStorage) DeleteArtifact(ctx context.Context, id models.ArtifactIdentifier) error {
 	// Resolve identifier to hash
 	hash, err := s.resolveIdentifier(id)
 	if err != nil {
-		return nil, fmt.Errorf("failed to resolve identifier: %w", err)
+		return fmt.Errorf("failed to resolve identifier: %w", err)
 	}
 
-	// Read existing metadata
-	existingMeta, err := s.GetMeta(ctx, id)
-	if err != nil {
-		if os.IsNotExist(err) {
-			// If metadata doesn't exist, check if artifact exists
-			_, blobPath, _ := s.getPaths(hash)
-			if _, err := os.Stat(blobPath); os.IsNotExist(err) {
-				return nil, fmt.Errorf("artifact with hash %s does not exist", hash)
-			}
-			// Artifact exists but no metadata - this shouldn't happen in normal operation
-			// but we'll handle it by just removing the artifact
-			if err := s.moveToTrash(ctx, hash); err != nil {
-				return nil, err
-			}
-			return nil, nil
-		}
-		return nil, fmt.Errorf("failed to read metadata: %w", err)
+	// Check if artifact exists
+	_, blobPath, _ := s.getPaths(hash)
+	if _, err := os.Stat(blobPath); os.IsNotExist(err) {
+		return fmt.Errorf("artifact with hash %s does not exist", hash)
 	}
 
 	// If id has a reference, delete only that reference
 	if id.HasReference() {
 		ref := id.Reference
-		found := false
-		newReferences := make([]models.ArtifactReference, 0, len(existingMeta.References))
-		for _, existingRef := range existingMeta.References {
-			if existingRef.Name == ref.Name && existingRef.Registry == ref.Registry {
-				found = true
-				// Delete the reference link
-				if err := s.deleteRef(&existingRef); err != nil {
-					return nil, fmt.Errorf("failed to delete reference link: %w", err)
-				}
-				// Skip this reference (remove it)
-			} else {
-				newReferences = append(newReferences, existingRef)
-			}
+
+		// Verify reference exists before deleting
+		if _, err := s.GetReference(ctx, hash, ref.Name, ref.Registry); err != nil {
+			return fmt.Errorf("reference with name %s and registry %s not found for artifact %s", ref.Name, ref.Registry, hash)
 		}
 
-		if !found {
-			return nil, fmt.Errorf("reference with name %s and repo %s not found for artifact %s", ref.Name, ref.Registry, hash)
+		// Delete the reference link (ref/ folder)
+		if err := s.deleteRef(ref); err != nil {
+			return fmt.Errorf("failed to delete reference link: %w", err)
 		}
 
-		// Update metadata with remaining references
-		existingMeta.References = newReferences
+		// Delete the metaref file
+		if err := s.deleteMetaRefFile(hash, ref); err != nil {
+			return fmt.Errorf("failed to delete metaref file: %w", err)
+		}
 	} else {
 		// No reference in id, delete all references
-		for _, existingRef := range existingMeta.References {
-			if err := s.deleteRef(&existingRef); err != nil {
-				return nil, fmt.Errorf("failed to delete reference link: %w", err)
-			}
+		refHashes, err := s.listMetaRefFiles(hash)
+		if err != nil {
+			return fmt.Errorf("failed to list references: %w", err)
 		}
-		existingMeta.References = []models.ArtifactReference{}
+
+		// Delete all reference files and links
+		for _, refHash := range refHashes {
+			// Read the reference to get name and registry for deleting ref link
+			_, refFilePath := s.getMetaRefPaths(hash, refHash)
+			f, err := os.Open(refFilePath)
+			if err != nil {
+				continue // Skip if file doesn't exist
+			}
+			var ref models.ArtifactReference
+			if err := json.NewDecoder(f).Decode(&ref); err != nil {
+				f.Close()
+				continue // Skip malformed references
+			}
+			f.Close()
+
+			// Delete ref link and metaref file
+			_ = s.deleteRef(&ref)
+			_ = s.deleteMetaRefFile(hash, &ref)
+		}
+	}
+
+	// Check if any references remain
+	refHashes, err := s.listMetaRefFiles(hash)
+	if err != nil {
+		return fmt.Errorf("failed to check remaining references: %w", err)
 	}
 
 	// If no references remain, move to trash
-	if len(existingMeta.References) == 0 {
+	if len(refHashes) == 0 {
 		if err := s.moveToTrash(ctx, hash); err != nil {
-			return nil, fmt.Errorf("failed to move artifact to trash: %w", err)
+			return fmt.Errorf("failed to move artifact to trash: %w", err)
 		}
-		return nil, nil
 	}
 
-	// Update metadata file
-	_, _, metaPath := s.getPaths(hash)
-	metaFile, err := os.Create(metaPath)
-	if err != nil {
-		return nil, fmt.Errorf("failed to update metadata file: %w", err)
-	}
-	defer metaFile.Close()
-
-	if err := json.NewEncoder(metaFile).Encode(existingMeta); err != nil {
-		return nil, fmt.Errorf("failed to encode updated metadata: %w", err)
-	}
-
-	return existingMeta, nil
+	return nil
 }
 
 // GetMeta reads the metadata JSON file.
@@ -560,19 +619,58 @@ func (s *SimpleFileStorage) GetMeta(ctx context.Context, id models.ArtifactIdent
 	return &meta, nil
 }
 
-// UpdateMeta overwrites the metadata JSON file.
-func (s *SimpleFileStorage) UpdateMeta(ctx context.Context, meta models.ArtifactMeta) (*models.ArtifactMeta, error) {
-	_, _, metaPath := s.getPaths(meta.Hash)
-	f, err := os.Create(metaPath)
+// GetReference retrieves a specific reference by name and registry for an artifact.
+func (s *SimpleFileStorage) GetReference(ctx context.Context, hash, name, registry string) (*models.ArtifactReference, error) {
+	ref := &models.ArtifactReference{
+		Name:     name,
+		Registry: registry,
+	}
+	refHash := computeReferenceHash(ref)
+	_, refFilePath := s.getMetaRefPaths(hash, refHash)
+
+	f, err := os.Open(refFilePath)
 	if err != nil {
-		return nil, err
+		if os.IsNotExist(err) {
+			return nil, fmt.Errorf("reference %s::%s not found for artifact %s", registry, name, hash)
+		}
+		return nil, fmt.Errorf("failed to open reference file: %w", err)
 	}
 	defer f.Close()
 
-	if err := json.NewEncoder(f).Encode(meta); err != nil {
+	var loadedRef models.ArtifactReference
+	if err := json.NewDecoder(f).Decode(&loadedRef); err != nil {
+		return nil, fmt.Errorf("failed to decode reference: %w", err)
+	}
+
+	return &loadedRef, nil
+}
+
+// UpdateReference updates an existing reference. Only Description and Tags can be modified.
+// Name and Registry fields are immutable and used for identification.
+// Tag keys must be ≤128 chars, values ≤1024 chars.
+func (s *SimpleFileStorage) UpdateReference(ctx context.Context, hash string, ref models.ArtifactReference) (*models.ArtifactReference, error) {
+	// Validate that the reference exists first
+	existingRef, err := s.GetReference(ctx, hash, ref.Name, ref.Registry)
+	if err != nil {
 		return nil, err
 	}
-	return &meta, nil
+
+	// Update only mutable fields
+	existingRef.Description = ref.Description
+	existingRef.Tags = ref.Tags
+	// Keep ReferencedTimestamp from existing reference (immutable)
+
+	// Validate and save
+	if err := s.createOrUpdateMetaRefFile(hash, existingRef); err != nil {
+		return nil, err
+	}
+
+	return existingRef, nil
+}
+
+// ListReferenceHashes returns all reference hashes (SHA256 of Registry::Name) for an artifact.
+func (s *SimpleFileStorage) ListReferenceHashes(ctx context.Context, hash string) ([]string, error) {
+	return s.listMetaRefFiles(hash)
 }
 
 // Exists checks if the artifact data and metadata exist using lightweight stat calls.

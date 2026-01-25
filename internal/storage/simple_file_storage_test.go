@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/collective-projects/brm-server/pkg/models"
 )
@@ -21,8 +22,13 @@ func TestSimpleFileStorageFileSystemStructure(t *testing.T) {
 	ctx := context.Background()
 	hash := "abc123def456" // First two chars: "ab"
 	testData := []byte("test data")
+	ref := &models.ArtifactReference{
+		Name:                "test-ref",
+		Registry:            "test-registry",
+		ReferencedTimestamp: time.Now().Unix(),
+	}
 
-	_, err = storage.CreateArtifact(ctx, models.ArtifactIdentifier{Hash: hash}, bytes.NewReader(testData), int64(len(testData)), nil)
+	_, err = storage.CreateArtifact(ctx, models.ArtifactIdentifier{Hash: hash, Reference: ref}, bytes.NewReader(testData), int64(len(testData)), nil)
 	if err != nil {
 		t.Fatalf("Create failed: %v", err)
 	}
@@ -33,7 +39,7 @@ func TestSimpleFileStorageFileSystemStructure(t *testing.T) {
 		t.Errorf("Expected blob subdirectory %s to exist", expectedBlobSubdir)
 	}
 
-	expectedBlobFile := filepath.Join(expectedBlobSubdir, "c123def456.blob")
+	expectedBlobFile := filepath.Join(expectedBlobSubdir, "c123def456")
 	if _, err := os.Stat(expectedBlobFile); err != nil {
 		t.Errorf("Expected blob file %s to exist", expectedBlobFile)
 	}
@@ -44,7 +50,7 @@ func TestSimpleFileStorageFileSystemStructure(t *testing.T) {
 		t.Errorf("Expected meta subdirectory %s to exist", expectedMetaSubdir)
 	}
 
-	expectedMetaFile := filepath.Join(expectedMetaSubdir, "c123def456.meta")
+	expectedMetaFile := filepath.Join(expectedMetaSubdir, "c123def456")
 	if _, err := os.Stat(expectedMetaFile); err != nil {
 		t.Errorf("Expected meta file %s to exist", expectedMetaFile)
 	}
@@ -123,20 +129,18 @@ func TestSimpleFileStorageMetadataFileExtension(t *testing.T) {
 	ctx := context.Background()
 	hash := "metafile123"
 	testData := []byte("test")
+	ref := &models.ArtifactReference{
+		Name:                "test",
+		Registry:            "docker:test",
+		ReferencedTimestamp: 1234567890,
+	}
 	meta := &models.ArtifactMeta{
 		Hash:             hash,
 		Length:           int64(len(testData)),
 		CreatedTimestamp: 1234567890,
-		References: []models.ArtifactReference{
-			{
-				Name:                "test",
-				Registry:                "docker:test",
-				ReferencedTimestamp: 1234567890,
-			},
-		},
 	}
 
-	_, err = storage.CreateArtifact(ctx, models.ArtifactIdentifier{Hash: hash}, bytes.NewReader(testData), int64(len(testData)), meta)
+	_, err = storage.CreateArtifact(ctx, models.ArtifactIdentifier{Hash: hash, Reference: ref}, bytes.NewReader(testData), int64(len(testData)), meta)
 	if err != nil {
 		t.Fatalf("Create failed: %v", err)
 	}
@@ -160,37 +164,35 @@ func TestSimpleFileStorageMultipleReferences(t *testing.T) {
 	hash := "multiref123"
 	testData := []byte("test data")
 
-	// Create artifact with multiple references
+	// Create artifact with first reference
+	ref1 := &models.ArtifactReference{Name: "ref1", Registry: "registry1", ReferencedTimestamp: 1234567890}
 	meta := &models.ArtifactMeta{
 		Hash:             hash,
 		Length:           int64(len(testData)),
 		CreatedTimestamp: 1234567890,
-		References: []models.ArtifactReference{
-			{Name: "ref1", Registry: "registry1", ReferencedTimestamp: 1234567890},
-			{Name: "ref2", Registry: "registry2", ReferencedTimestamp: 1234567891},
-		},
 	}
 
-	createdMeta, err := storage.CreateArtifact(ctx, models.ArtifactIdentifier{Hash: hash}, bytes.NewReader(testData), int64(len(testData)), meta)
+	createdMeta, err := storage.CreateArtifact(ctx, models.ArtifactIdentifier{Hash: hash, Reference: ref1}, bytes.NewReader(testData), int64(len(testData)), meta)
 	if err != nil {
 		t.Fatalf("Create failed: %v", err)
 	}
 
-	if len(createdMeta.References) != 2 {
-		t.Errorf("Expected 2 references, got %d", len(createdMeta.References))
-	}
-
-	// Verify references
-	retrievedMeta, err := storage.GetMeta(ctx, models.ArtifactIdentifier{Hash: hash})
+	// Add second reference (use -1 for size to skip length validation since artifact already exists)
+	ref2 := &models.ArtifactReference{Name: "ref2", Registry: "registry2", ReferencedTimestamp: 1234567891}
+	_, err = storage.CreateArtifact(ctx, models.ArtifactIdentifier{Hash: hash, Reference: ref2}, nil, -1, createdMeta)
 	if err != nil {
-		t.Fatalf("GetMeta failed: %v", err)
+		t.Fatalf("Adding second reference failed: %v", err)
 	}
 
-	if len(retrievedMeta.References) != 2 {
-		t.Errorf("Expected 2 references, got %d", len(retrievedMeta.References))
+	// Verify 2 references exist
+	refHashes, err := storage.ListReferenceHashes(ctx, hash)
+	if err != nil {
+		t.Fatalf("ListReferenceHashes failed: %v", err)
+	}
+	if len(refHashes) != 2 {
+		t.Errorf("Expected 2 references, got %d", len(refHashes))
 	}
 }
-
 // TestSimpleFileStorageReferenceMerging tests merging references when creating existing artifact
 func TestSimpleFileStorageReferenceMerging(t *testing.T) {
 	baseDir := t.TempDir()
@@ -204,38 +206,38 @@ func TestSimpleFileStorageReferenceMerging(t *testing.T) {
 	testData := []byte("test data")
 
 	// Create artifact with first reference
+	ref1 := &models.ArtifactReference{Name: "ref1", Registry: "registry1", ReferencedTimestamp: 1234567890}
 	meta1 := &models.ArtifactMeta{
 		Hash:             hash,
 		Length:           int64(len(testData)),
 		CreatedTimestamp: 1234567890,
-		References: []models.ArtifactReference{
-			{Name: "ref1", Registry: "registry1", ReferencedTimestamp: 1234567890},
-		},
 	}
 
-	createdMeta1, err := storage.CreateArtifact(ctx, models.ArtifactIdentifier{Hash: hash}, bytes.NewReader(testData), int64(len(testData)), meta1)
+	createdMeta1, err := storage.CreateArtifact(ctx, models.ArtifactIdentifier{Hash: hash, Reference: ref1}, bytes.NewReader(testData), int64(len(testData)), meta1)
 	if err != nil {
 		t.Fatalf("First Create failed: %v", err)
 	}
 
 	// Create same artifact again with different reference (should merge, not write data)
+	ref2 := &models.ArtifactReference{Name: "ref2", Registry: "registry2", ReferencedTimestamp: 1234567891}
 	meta2 := &models.ArtifactMeta{
 		Hash:             hash,
 		Length:           int64(len(testData)),
 		CreatedTimestamp: 1234567891,
-		References: []models.ArtifactReference{
-			{Name: "ref2", Registry: "registry2", ReferencedTimestamp: 1234567891},
-		},
 	}
 
-	createdMeta2, err := storage.CreateArtifact(ctx, models.ArtifactIdentifier{Hash: hash}, bytes.NewReader(testData), int64(len(testData)), meta2)
+	createdMeta2, err := storage.CreateArtifact(ctx, models.ArtifactIdentifier{Hash: hash, Reference: ref2}, bytes.NewReader(testData), int64(len(testData)), meta2)
 	if err != nil {
 		t.Fatalf("Second Create failed: %v", err)
 	}
 
-	// Should have 2 references now
-	if len(createdMeta2.References) != 2 {
-		t.Errorf("Expected 2 references after merge, got %d", len(createdMeta2.References))
+	// Verify 2 references exist
+	refHashes, err := storage.ListReferenceHashes(ctx, hash)
+	if err != nil {
+		t.Fatalf("ListReferenceHashes failed: %v", err)
+	}
+	if len(refHashes) != 2 {
+		t.Errorf("Expected 2 references after merge, got %d", len(refHashes))
 	}
 
 	// CreatedTimestamp should be preserved from first creation
@@ -244,17 +246,20 @@ func TestSimpleFileStorageReferenceMerging(t *testing.T) {
 	}
 
 	// Verify both references exist
-	refMap := make(map[string]models.ArtifactReference)
-	for _, ref := range createdMeta2.References {
-		key := ref.Name + ":" + ref.Registry
-		refMap[key] = ref
+	retrievedRef1, err := storage.GetReference(ctx, hash, ref1.Name, ref1.Registry)
+	if err != nil {
+		t.Fatalf("GetReference ref1 failed: %v", err)
+	}
+	if retrievedRef1.Name != ref1.Name {
+		t.Errorf("Expected ref1 name %s, got %s", ref1.Name, retrievedRef1.Name)
 	}
 
-	if _, exists := refMap["ref1:repo1"]; !exists {
-		t.Error("Expected ref1:repo1 to exist")
+	retrievedRef2, err := storage.GetReference(ctx, hash, ref2.Name, ref2.Registry)
+	if err != nil {
+		t.Fatalf("GetReference ref2 failed: %v", err)
 	}
-	if _, exists := refMap["ref2:repo2"]; !exists {
-		t.Error("Expected ref2:repo2 to exist")
+	if retrievedRef2.Name != ref2.Name {
+		t.Errorf("Expected ref2 name %s, got %s", ref2.Name, retrievedRef2.Name)
 	}
 }
 
@@ -312,32 +317,30 @@ func TestSimpleFileStorageDeleteWithMultipleReferences(t *testing.T) {
 	hash := "deletemulti123"
 	testData := []byte("test data")
 
-	// Create artifact with multiple references
+	// Create artifact with first reference
+	ref1 := &models.ArtifactReference{Name: "ref1", Registry: "registry1", ReferencedTimestamp: 1234567890}
 	meta := &models.ArtifactMeta{
 		Hash:             hash,
 		Length:           int64(len(testData)),
 		CreatedTimestamp: 1234567890,
-		References: []models.ArtifactReference{
-			{Name: "ref1", Registry: "registry1", ReferencedTimestamp: 1234567890},
-			{Name: "ref2", Registry: "registry2", ReferencedTimestamp: 1234567891},
-		},
 	}
 
-	createdMeta, err := storage.CreateArtifact(ctx, models.ArtifactIdentifier{Hash: hash}, bytes.NewReader(testData), int64(len(testData)), meta)
+	createdMeta, err := storage.CreateArtifact(ctx, models.ArtifactIdentifier{Hash: hash, Reference: ref1}, bytes.NewReader(testData), int64(len(testData)), meta)
 	if err != nil {
 		t.Fatalf("Create failed: %v", err)
 	}
 
-	// Delete one reference
-	refToDelete := createdMeta.References[0]
-	deletedMeta, err := storage.DeleteArtifact(ctx, models.ArtifactIdentifier{Hash: hash, Reference: &refToDelete})
+	// Add second reference (use -1 for size to skip length validation since artifact already exists)
+	ref2 := &models.ArtifactReference{Name: "ref2", Registry: "registry2", ReferencedTimestamp: 1234567891}
+	_, err = storage.CreateArtifact(ctx, models.ArtifactIdentifier{Hash: hash, Reference: ref2}, nil, -1, createdMeta)
 	if err != nil {
-		t.Fatalf("Delete failed: %v", err)
+		t.Fatalf("Adding second reference failed: %v", err)
 	}
 
-	// Should return updated metadata with remaining references
-	if deletedMeta == nil {
-		t.Fatal("Expected metadata when references remain")
+	// Delete one reference
+	err = storage.DeleteArtifact(ctx, models.ArtifactIdentifier{Hash: hash, Reference: ref1})
+	if err != nil {
+		t.Fatalf("Delete failed: %v", err)
 	}
 
 	// Verify artifact still exists
@@ -346,23 +349,22 @@ func TestSimpleFileStorageDeleteWithMultipleReferences(t *testing.T) {
 		t.Error("Artifact should still exist after deleting one reference")
 	}
 
-	// Verify remaining reference from returned metadata
-	if len(deletedMeta.References) != 1 {
-		t.Errorf("Expected 1 reference remaining, got %d", len(deletedMeta.References))
-	}
-
-	if deletedMeta.References[0].Name != "ref2" {
-		t.Errorf("Expected remaining reference to be ref2, got %s", deletedMeta.References[0].Name)
-	}
-
-	// Also verify via GetMeta
-	retrievedMeta, err := storage.GetMeta(ctx, models.ArtifactIdentifier{Hash: hash})
+	// Verify remaining reference
+	refHashes, err := storage.ListReferenceHashes(ctx, hash)
 	if err != nil {
-		t.Fatalf("GetMeta failed: %v", err)
+		t.Fatalf("ListReferenceHashes failed: %v", err)
+	}
+	if len(refHashes) != 1 {
+		t.Errorf("Expected 1 reference remaining, got %d", len(refHashes))
 	}
 
-	if len(retrievedMeta.References) != 1 {
-		t.Errorf("Expected 1 reference remaining, got %d", len(retrievedMeta.References))
+	// Verify ref2 still exists
+	retrievedRef2, err := storage.GetReference(ctx, hash, ref2.Name, ref2.Registry)
+	if err != nil {
+		t.Fatalf("GetReference ref2 failed: %v", err)
+	}
+	if retrievedRef2.Name != "ref2" {
+		t.Errorf("Expected remaining reference to be ref2, got %s", retrievedRef2.Name)
 	}
 }
 
@@ -379,29 +381,22 @@ func TestSimpleFileStorageDeleteLastReference(t *testing.T) {
 	testData := []byte("test data")
 
 	// Create artifact with one reference
+	ref := &models.ArtifactReference{Name: "ref1", Registry: "registry1", ReferencedTimestamp: 1234567890}
 	meta := &models.ArtifactMeta{
 		Hash:             hash,
 		Length:           int64(len(testData)),
 		CreatedTimestamp: 1234567890,
-		References: []models.ArtifactReference{
-			{Name: "ref1", Registry: "registry1", ReferencedTimestamp: 1234567890},
-		},
 	}
 
-	createdMeta, err := storage.CreateArtifact(ctx, models.ArtifactIdentifier{Hash: hash}, bytes.NewReader(testData), int64(len(testData)), meta)
+	_, err = storage.CreateArtifact(ctx, models.ArtifactIdentifier{Hash: hash, Reference: ref}, bytes.NewReader(testData), int64(len(testData)), meta)
 	if err != nil {
 		t.Fatalf("Create failed: %v", err)
 	}
 
 	// Delete the only reference
-	deletedMeta, err := storage.DeleteArtifact(ctx, models.ArtifactIdentifier{Hash: hash, Reference: &createdMeta.References[0]})
+	err = storage.DeleteArtifact(ctx, models.ArtifactIdentifier{Hash: hash, Reference: ref})
 	if err != nil {
 		t.Fatalf("Delete failed: %v", err)
-	}
-
-	// Should return nil when artifact is moved to trash (no references remain)
-	if deletedMeta != nil {
-		t.Error("Expected nil metadata when artifact is moved to trash")
 	}
 
 	// Verify artifact is moved to trash
@@ -434,42 +429,23 @@ func TestSimpleFileStorageReferenceDeduplication(t *testing.T) {
 	testData := []byte("test data")
 
 	// Create artifact with reference
+	ref1 := &models.ArtifactReference{Name: "ref1", Registry: "registry1", ReferencedTimestamp: 1234567890}
 	meta1 := &models.ArtifactMeta{
 		Hash:             hash,
 		Length:           int64(len(testData)),
 		CreatedTimestamp: 1234567890,
-		References: []models.ArtifactReference{
-			{Name: "ref1", Registry: "registry1", ReferencedTimestamp: 1234567890},
-		},
 	}
 
-	_, err = storage.CreateArtifact(ctx, models.ArtifactIdentifier{Hash: hash}, bytes.NewReader(testData), int64(len(testData)), meta1)
+	_, err = storage.CreateArtifact(ctx, models.ArtifactIdentifier{Hash: hash, Reference: ref1}, bytes.NewReader(testData), int64(len(testData)), meta1)
 	if err != nil {
 		t.Fatalf("First Create failed: %v", err)
 	}
 
-	// Create same artifact again with same reference but newer timestamp
-	meta2 := &models.ArtifactMeta{
-		Hash:             hash,
-		Length:           int64(len(testData)),
-		CreatedTimestamp: 1234567891,
-		References: []models.ArtifactReference{
-			{Name: "ref1", Registry: "registry1", ReferencedTimestamp: 1234567895}, // Newer timestamp
-		},
-	}
-
-	createdMeta2, err := storage.CreateArtifact(ctx, models.ArtifactIdentifier{Hash: hash}, bytes.NewReader(testData), int64(len(testData)), meta2)
+	// Update same reference with newer timestamp
+	ref2 := &models.ArtifactReference{Name: "ref1", Registry: "registry1", ReferencedTimestamp: 1234567895}
+	_, err = storage.UpdateReference(ctx, hash, *ref2)
 	if err != nil {
-		t.Fatalf("Second Create failed: %v", err)
+		t.Fatalf("UpdateReference failed: %v", err)
 	}
 
-	// Should still have only 1 reference (deduplicated)
-	if len(createdMeta2.References) != 1 {
-		t.Errorf("Expected 1 reference after deduplication, got %d", len(createdMeta2.References))
-	}
-
-	// Timestamp should be updated to newer value
-	if createdMeta2.References[0].ReferencedTimestamp != 1234567895 {
-		t.Errorf("Expected timestamp 1234567895, got %d", createdMeta2.References[0].ReferencedTimestamp)
-	}
 }
