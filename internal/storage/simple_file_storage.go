@@ -27,8 +27,10 @@ func NewSimpleFileStorage(alias, baseDir string) (*SimpleFileStorage, error) {
 	}
 	s := &SimpleFileStorage{
 		baseDir: baseDir,
+		BaseStorage: models.BaseStorage{
+			Alias: alias,
+		},
 	}
-	s.BaseStorage.SetAlias(alias)
 	return s, nil
 }
 
@@ -39,7 +41,7 @@ func computeReferenceHash(ref *models.ArtifactReference) string {
 	return hex.EncodeToString(hash[:])
 }
 
-// getPaths returns the directory, artifact path, and metadata path for a given hash.
+// getPaths returns the directory, artifact/blob path, and metadata path for a given hash.
 // Uses blob/ and meta/ subdirectories with 2-character git-like structure.
 func (s *SimpleFileStorage) getPaths(hash string) (dir, blobPath, metaPath string) {
 	if len(hash) < 2 {
@@ -66,6 +68,22 @@ func (s *SimpleFileStorage) getRefPath(refHash string) (dir, refPath string) {
 		fileName := refHash[2:]
 		dir = filepath.Join(s.baseDir, "ref", subDir)
 		refPath = filepath.Join(dir, fileName)
+	}
+	return
+}
+
+// getTrashPath returns the trash directory path for a given hash using git-like structure.
+func (s *SimpleFileStorage) getTrashPath(hash string) (dir, blobPath, metaPath string) {
+	if len(hash) < 2 {
+		dir = filepath.Join(s.baseDir, ".trash", "blob")
+		blobPath = filepath.Join(dir, hash)
+		metaPath = filepath.Join(s.baseDir, ".trash", "meta", hash)
+	} else {
+		subDir := hash[:2]
+		fileName := hash[2:]
+		dir = filepath.Join(s.baseDir, ".trash", "blob", subDir)
+		blobPath = filepath.Join(dir, fileName)
+		metaPath = filepath.Join(s.baseDir, ".trash", "meta", subDir, fileName)
 	}
 	return
 }
@@ -113,22 +131,6 @@ func (s *SimpleFileStorage) deleteRef(ref *models.ArtifactReference) error {
 		return nil // Already deleted
 	}
 	return err
-}
-
-// getTrashPath returns the trash directory path for a given hash using git-like structure.
-func (s *SimpleFileStorage) getTrashPath(hash string) (dir, blobPath, metaPath string) {
-	if len(hash) < 2 {
-		dir = filepath.Join(s.baseDir, ".trash", "blob")
-		blobPath = filepath.Join(dir, hash)
-		metaPath = filepath.Join(s.baseDir, ".trash", "meta", hash)
-	} else {
-		subDir := hash[:2]
-		fileName := hash[2:]
-		dir = filepath.Join(s.baseDir, ".trash", "blob", subDir)
-		blobPath = filepath.Join(dir, fileName)
-		metaPath = filepath.Join(s.baseDir, ".trash", "meta", subDir, fileName)
-	}
-	return
 }
 
 // mergeReferences merges new references into existing references, deduplicating by Name+Registry.
@@ -212,6 +214,12 @@ func (s *SimpleFileStorage) CreateArtifact(ctx context.Context, id models.Artifa
 		return nil, fmt.Errorf("invalid identifier")
 	}
 
+	//check if both id.hash and meta.hash are present, they match
+	if id.HasHash() && meta != nil && meta.Hash != "" && id.Hash != meta.Hash {
+		return nil, fmt.Errorf("hash mismatch between identifier and metadata")
+	}
+
+	// Get paths
 	dir, blobPath, metaPath := s.getPaths(hash)
 
 	// Check if artifact file already exists

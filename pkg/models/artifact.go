@@ -102,10 +102,6 @@ func (b *BaseStorage) GetStorageInfo() ArtifactStorageInfo {
 	}
 }
 
-// SetAlias sets the alias/name of the storage.
-func (b *BaseStorage) SetAlias(alias string) {
-	b.Alias = alias
-}
 
 // ArtifactStorage is the high-performance interface.
 type ArtifactStorage interface {
@@ -123,7 +119,7 @@ type ArtifactStorage interface {
 	// It returns 'actual' containing the actual range being returned (calculated).
 	// This is useful if the requested Length was -1 or exceeded the file size.
 	// IMPORTANT: The caller MUST close rc.
-	// Implementations are definitely expected to suport this method.
+	// Implementations are definitely expected to support this method.
 	ReadBlob(ctx context.Context, req ArtifactRange) (rc io.ReadCloser, actual ArtifactRange, err error)
 
 	// UpdateBlob modifies a specific range by streaming data from 'r'.
