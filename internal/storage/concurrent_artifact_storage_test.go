@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/collective-projects/brm-server/pkg/models"
-
 )
 
 // mockStorage is a simple mock implementation of ArtifactStorage for testing
@@ -92,7 +91,7 @@ func (m *mockStorage) DeleteArtifact(ctx context.Context, id models.ArtifactIden
 	if id.HasReference() {
 		ref := *id.Reference
 		refHash := ref.Name + "::" + ref.Registry
-		
+
 		if m.references[hash] == nil || m.references[hash][refHash] == nil {
 			return fmt.Errorf("reference with name %s and repo %s not found for artifact %s", ref.Name, ref.Registry, hash)
 		}
@@ -224,20 +223,20 @@ func TestConcurrentArtifactStorageDelegation(t *testing.T) {
 // func TestConcurrentArtifactStorageConcurrentCreate(t *testing.T) {
 // 	lockDir := t.TempDir()
 // 	mock := newMockStorage()
-// 
+//
 // 	wrapper, err := NewConcurrentArtifactStorage(mock, lockDir, 30*time.Second)
 // 	if err != nil {
 // 		t.Fatalf("Failed to create wrapper: %v", err)
 // 	}
-// 
+//
 // 	ctx := context.Background()
 // 	hash := "concurrent-create"
 // 	testData := []byte("test data")
 // 	const numGoroutines = 10
-// 
+//
 // 	var wg sync.WaitGroup
 // 	errors := make(chan error, numGoroutines)
-// 
+//
 // 	for i := 0; i < numGoroutines; i++ {
 // 		wg.Add(1)
 // 		go func(id int) {
@@ -256,15 +255,15 @@ func TestConcurrentArtifactStorageDelegation(t *testing.T) {
 // 			}
 // 		}(i)
 // 	}
-// 
+//
 // 	wg.Wait()
 // 	close(errors)
-// 
+//
 // 	// Check for errors
 // 	for err := range errors {
 // 		t.Errorf("Concurrent create error: %v", err)
 // 	}
-// 
+//
 // 	// Verify all references were merged
 // 	finalMeta, err := wrapper.GetMeta(ctx, models.ArtifactIdentifier{Hash: hash})
 // 	if err != nil {
@@ -279,16 +278,16 @@ func TestConcurrentArtifactStorageDelegation(t *testing.T) {
 // func TestConcurrentArtifactStorageConcurrentDelete(t *testing.T) {
 // 	lockDir := t.TempDir()
 // 	mock := newMockStorage()
-// 
+//
 // 	wrapper, err := NewConcurrentArtifactStorage(mock, lockDir, 30*time.Second)
 // 	if err != nil {
 // 		t.Fatalf("Failed to create wrapper: %v", err)
 // 	}
-// 
+//
 // 	ctx := context.Background()
 // 	hash := "concurrent-delete"
 // 	testData := []byte("test data")
-// 
+//
 // 	// Create artifact with multiple references
 // 	meta := &models.ArtifactMeta{
 // 		Hash:             hash,
@@ -303,18 +302,18 @@ func TestConcurrentArtifactStorageDelegation(t *testing.T) {
 // 			ReferencedTimestamp: time.Now().Unix(),
 // 		})
 // 	}
-// 
+//
 // 	createdMeta, err := wrapper.CreateArtifact(ctx, models.ArtifactIdentifier{Hash: hash}, bytes.NewReader(testData), int64(len(testData)), meta)
 // 	if err != nil {
 // 		t.Fatalf("Create failed: %v", err)
 // 	}
-// 
+//
 // 	// Delete references concurrently
 // 	const numDeletes = 5
 // 	var wg sync.WaitGroup
 // 	errors := make(chan error, numDeletes)
 // 	successDeletes := make(chan bool, numDeletes)
-// 
+//
 // 	for i := 0; i < numDeletes; i++ {
 // 		wg.Add(1)
 // 		go func(id int) {
@@ -328,17 +327,17 @@ func TestConcurrentArtifactStorageDelegation(t *testing.T) {
 // 			}
 // 		}(i)
 // 	}
-// 
+//
 // 	wg.Wait()
 // 	close(errors)
 // 	close(successDeletes)
-// 
+//
 // 	// Count successful deletions
 // 	successCount := 0
 // 	for range successDeletes {
 // 		successCount++
 // 	}
-// 
+//
 // 	// Check for errors (some might fail if reference already deleted, which is expected with locking)
 // 	errorCount := 0
 // 	for err := range errors {
@@ -348,18 +347,18 @@ func TestConcurrentArtifactStorageDelegation(t *testing.T) {
 // 			t.Logf("Concurrent delete error (may be expected): %v", err)
 // 		}
 // 	}
-// 
+//
 // 	// Verify that at least some deletions succeeded (locking should prevent all from failing)
 // 	if successCount == 0 && errorCount == numDeletes {
 // 		t.Error("All concurrent deletes failed - locking may not be working")
 // 	}
-// 
+//
 // 	// Verify final state is consistent (no corruption)
 // 	finalMeta, err := wrapper.GetMeta(ctx, models.ArtifactIdentifier{Hash: hash})
 // 	if err != nil && err.Error() != "not found" {
 // 		t.Fatalf("GetMeta failed: %v", err)
 // 	}
-// 
+//
 // 	// Verify that remaining references are valid (no duplicates, all from original set)
 // 	if finalMeta != nil {
 // 		remainingCount := len(finalMeta.References)
@@ -382,16 +381,16 @@ func TestConcurrentArtifactStorageDelegation(t *testing.T) {
 // func TestConcurrentArtifactStorageCreateDeleteRace(t *testing.T) {
 // 	lockDir := t.TempDir()
 // 	mock := newMockStorage()
-// 
+//
 // 	wrapper, err := NewConcurrentArtifactStorage(mock, lockDir, 30*time.Second)
 // 	if err != nil {
 // 		t.Fatalf("Failed to create wrapper: %v", err)
 // 	}
-// 
+//
 // 	ctx := context.Background()
 // 	hash := "race-test"
 // 	testData := []byte("test data")
-// 
+//
 // 	// Create initial artifact
 // 	meta := &models.ArtifactMeta{
 // 		Hash:             hash,
@@ -405,11 +404,11 @@ func TestConcurrentArtifactStorageDelegation(t *testing.T) {
 // 	if err != nil {
 // 		t.Fatalf("Initial create failed: %v", err)
 // 	}
-// 
+//
 // 	// Concurrently create and delete
 // 	var wg sync.WaitGroup
 // 	errors := make(chan error, 2)
-// 
+//
 // 	// Create goroutine
 // 	wg.Add(1)
 // 	go func() {
@@ -427,7 +426,7 @@ func TestConcurrentArtifactStorageDelegation(t *testing.T) {
 // 			errors <- err
 // 		}
 // 	}()
-// 
+//
 // 	// Delete goroutine
 // 	wg.Add(1)
 // 	go func() {
@@ -438,15 +437,15 @@ func TestConcurrentArtifactStorageDelegation(t *testing.T) {
 // 			errors <- err
 // 		}
 // 	}()
-// 
+//
 // 	wg.Wait()
 // 	close(errors)
-// 
+//
 // 	// Check for errors
 // 	for err := range errors {
 // 		t.Errorf("Race condition error: %v", err)
 // 	}
-// 
+//
 // 	// Verify final state is consistent
 // 	finalMeta, err := wrapper.GetMeta(ctx, models.ArtifactIdentifier{Hash: hash})
 // 	if err != nil && err.Error() != "not found" {
@@ -464,35 +463,35 @@ func TestConcurrentArtifactStorageDelegation(t *testing.T) {
 // func TestConcurrentArtifactStorageLockTimeout(t *testing.T) {
 // 	lockDir := t.TempDir()
 // 	mock := newMockStorage()
-// 
+//
 // 	// Use a very short timeout
 // 	shortTimeout := 100 * time.Millisecond
 // 	wrapper, err := NewConcurrentArtifactStorage(mock, lockDir, shortTimeout)
 // 	if err != nil {
 // 		t.Fatalf("Failed to create wrapper: %v", err)
 // 	}
-// 
+//
 // 	ctx := context.Background()
 // 	hash := "timeout-test"
 // 	testData := []byte("test data")
-// 
+//
 // 	// Create a context that will hold the lock for longer than timeout
 // 	lockCtx, cancel := context.WithCancel(ctx)
 // 	defer cancel()
-// 
+//
 // 	// Acquire lock manually to simulate a stuck process
 // 	lockPath := wrapper.GetLockPath(hash)
 // 	lockDirPath := filepath.Dir(lockPath)
 // 	if err := os.MkdirAll(lockDirPath, 0755); err != nil {
 // 		t.Fatalf("Failed to create lock directory: %v", err)
 // 	}
-// 
+//
 // 	fileLock := flock.New(lockPath)
 // 	if err := fileLock.Lock(); err != nil {
 // 		t.Fatalf("Failed to acquire test lock: %v", err)
 // 	}
 // 	defer fileLock.Unlock()
-// 
+//
 // 	// Try to create with the lock held - should timeout
 // 	meta := &models.ArtifactMeta{
 // 		Hash:             hash,
@@ -500,7 +499,7 @@ func TestConcurrentArtifactStorageDelegation(t *testing.T) {
 // 		CreatedTimestamp: time.Now().Unix(),
 // 		References:       []models.ArtifactReference{},
 // 	}
-// 
+//
 // 	_, err = wrapper.CreateArtifact(lockCtx, models.ArtifactIdentifier{Hash: hash}, bytes.NewReader(testData), int64(len(testData)), meta)
 // 	if err == nil {
 // 		t.Fatal("Expected timeout error, got nil")
@@ -514,16 +513,16 @@ func TestConcurrentArtifactStorageDelegation(t *testing.T) {
 // func TestConcurrentArtifactStorageReadOperationsNoLock(t *testing.T) {
 // 	lockDir := t.TempDir()
 // 	mock := newMockStorage()
-// 
+//
 // 	wrapper, err := NewConcurrentArtifactStorage(mock, lockDir, 30*time.Second)
 // 	if err != nil {
 // 		t.Fatalf("Failed to create wrapper: %v", err)
 // 	}
-// 
+//
 // 	ctx := context.Background()
 // 	hash := "read-test"
 // 	testData := []byte("test data")
-// 
+//
 // 	// Create artifact first
 // 	meta := &models.ArtifactMeta{
 // 		Hash:             hash,
@@ -535,12 +534,12 @@ func TestConcurrentArtifactStorageDelegation(t *testing.T) {
 // 	if err != nil {
 // 		t.Fatalf("Create failed: %v", err)
 // 	}
-// 
+//
 // 	// Multiple concurrent reads should work without blocking
 // 	const numReads = 20
 // 	var wg sync.WaitGroup
 // 	errors := make(chan error, numReads)
-// 
+//
 // 	for i := 0; i < numReads; i++ {
 // 		wg.Add(1)
 // 		go func() {
@@ -551,10 +550,10 @@ func TestConcurrentArtifactStorageDelegation(t *testing.T) {
 // 			}
 // 		}()
 // 	}
-// 
+//
 // 	wg.Wait()
 // 	close(errors)
-// 
+//
 // 	// Check for errors
 // 	for err := range errors {
 // 		t.Errorf("Concurrent read error: %v", err)

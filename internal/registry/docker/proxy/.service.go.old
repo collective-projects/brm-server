@@ -1,0 +1,388 @@
+package proxy
+
+import (
+	"bytes"
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"fmt"
+	"io"
+	"sync"
+	"time"
+
+	"github.com/collective-projects/brm-server/pkg/models"
+)
+
+// DockerRegistryProxyService handles core registry logic: cache management and upstream communication
+type DockerRegistryProxyService struct {
+	storage        models.ArtifactStorage
+	client         *DockerRegistryProxyClient
+	cacheTTL       time.Duration
+	upstreamConfig *models.UpstreamRegistry
+	registryAlias  string
+}
+
+// NewDockerRegistryProxyService creates a new Docker registry service
+func NewDockerRegistryProxyService(
+	registryAlias string,
+	storageAlias string,
+	upstream *models.UpstreamRegistry,
+	cacheTTL int64,
+) (*DockerRegistryProxyService, error) {
+	// Create upstream client
+	client := NewDockerRegistryProxyClient(upstream)
+
+	// Determine cache TTL
+	ttl := 168 * time.Hour // Default 7 days
+	if cacheTTL > 0 {
+		ttl = time.Duration(cacheTTL) * time.Second
+	}
+
+	return &DockerRegistryProxyService{
+		client:         client,
+		cacheTTL:       ttl,
+		upstreamConfig: upstream,
+		registryAlias:  registryAlias,
+	}, nil
+}
+
+// SetStorage sets the storage backend (called after storage is resolved)
+func (s *DockerRegistryProxyService) SetStorage(storage models.ArtifactStorage) {
+	s.storage = storage
+}
+
+// getCacheKey generates a cache key for a manifest or blob
+func (s *DockerRegistryProxyService) getCacheKey(name, digest string) string {
+	// Use digest as hash for content-addressable storage
+	return digest
+}
+
+// isCacheExpired checks if cached artifact has expired based on TTL
+func (s *DockerRegistryProxyService) isCacheExpired(meta *models.ArtifactMeta) bool {
+	if meta == nil {
+		return true
+	}
+	if s.cacheTTL <= 0 {
+		return false // No expiration
+	}
+	age := time.Since(time.Unix(meta.CreatedTimestamp, 0))
+	return age > s.cacheTTL
+}
+
+// GetManifest retrieves a manifest, checking cache first, then upstream
+func (s *DockerRegistryProxyService) GetManifest(ctx context.Context, name, reference string) ([]byte, string, error) {
+	// First, try to get from upstream to get the digest
+	manifestData, mediaType, err := s.client.GetManifest(ctx, name, reference)
+	if err != nil {
+		return nil, "", fmt.Errorf("failed to fetch manifest from upstream: %w", err)
+	}
+
+	// Calculate digest from manifest data
+	digest := s.calculateDigest(manifestData)
+	cacheKey := s.getCacheKey(name, digest)
+
+	// Check cache
+	meta, err := s.storage.GetMeta(ctx, models.ArtifactIdentifier{Hash: cacheKey})
+	if err == nil && meta != nil && !s.isCacheExpired(meta) {
+		// Cache hit - read from cache
+		readReq := models.ArtifactRange{
+			Identifier: models.ArtifactIdentifier{Hash: cacheKey},
+			Range: models.ByteRange{
+				Offset: 0,
+				Length: -1,
+			},
+		}
+		rc, _, err := s.storage.ReadBlob(ctx, readReq)
+		if err == nil {
+			defer rc.Close()
+			cachedData, err := io.ReadAll(rc)
+			if err == nil {
+				return cachedData, mediaType, nil
+			}
+		}
+	}
+
+	// Cache miss or expired - store in cache
+	ref := models.ArtifactReference{
+		Name:                name,
+		Registry:            s.registryAlias,
+		ReferencedTimestamp: time.Now().Unix(),
+	}
+	meta = &models.ArtifactMeta{
+		Hash:             cacheKey,
+		Length:           int64(len(manifestData)),
+		CreatedTimestamp: time.Now().Unix(),
+	}
+
+	_, err = s.storage.CreateArtifact(ctx, models.ArtifactIdentifier{Hash: cacheKey, Reference: &ref}, bytes.NewReader(manifestData), int64(len(manifestData)), meta)
+	if err != nil {
+		// Log error but continue - cache write failure shouldn't break the request
+	}
+
+	return manifestData, mediaType, nil
+}
+
+// CheckManifestExists checks if a manifest exists
+func (s *DockerRegistryProxyService) CheckManifestExists(ctx context.Context, name, reference string) (bool, string, error) {
+	exists, digest, err := s.client.CheckManifestExists(ctx, name, reference)
+	if err != nil {
+		return false, "", err
+	}
+	return exists, digest, nil
+}
+
+// GetBlob retrieves a blob, checking cache first, then upstream
+func (s *DockerRegistryProxyService) GetBlob(ctx context.Context, name, digest string) (io.ReadCloser, int64, error) {
+	cacheKey := s.getCacheKey(name, digest)
+
+	// Check cache
+	meta, err := s.storage.GetMeta(ctx, models.ArtifactIdentifier{Hash: cacheKey})
+	if err == nil && meta != nil && !s.isCacheExpired(meta) {
+		// Cache hit - read from cache
+		readReq := models.ArtifactRange{
+			Identifier: models.ArtifactIdentifier{Hash: cacheKey},
+			Range: models.ByteRange{
+				Offset: 0,
+				Length: -1,
+			},
+		}
+		rc, actualRange, err := s.storage.ReadBlob(ctx, readReq)
+		if err == nil {
+			return rc, actualRange.Range.Length, nil
+		}
+	}
+
+	// Cache miss or expired - fetch from upstream
+	blobReader, size, err := s.client.GetBlob(ctx, name, digest)
+	if err != nil {
+		return nil, 0, fmt.Errorf("failed to fetch blob from upstream: %w", err)
+	}
+
+	// Use streaming approach: write to cache and response simultaneously
+	// Create pipes for cache and response streams
+	cacheReader, cacheWriter := io.Pipe()
+	responseReader, responseWriter := io.Pipe()
+
+	// Prepare metadata for cache
+	ref := models.ArtifactReference{
+		Name:                name,
+		Registry:            s.registryAlias,
+		ReferencedTimestamp: time.Now().Unix(),
+	}
+	meta = &models.ArtifactMeta{
+		Hash:             cacheKey,
+		Length:           size,
+		CreatedTimestamp: time.Now().Unix(),
+	}
+
+	// Channel to track cache write completion and errors
+	cacheDone := make(chan error, 1)
+	streamDone := make(chan error, 1)
+
+	// Start goroutine to write to cache (non-blocking)
+	go func() {
+		defer cacheReader.Close()
+		_, err := s.storage.CreateArtifact(ctx, models.ArtifactIdentifier{Hash: cacheKey}, cacheReader, size, meta)
+		if err != nil {
+			cacheDone <- fmt.Errorf("failed to cache blob: %w", err)
+			return
+		}
+		cacheDone <- nil
+	}()
+
+	// Start goroutine to stream from upstream to both cache and response
+	go func() {
+		defer func() {
+			// Ensure all resources are closed on exit
+			responseWriter.Close()
+			cacheWriter.Close()
+			blobReader.Close()
+		}()
+
+		// Use TeeReader to write to cache while reading from upstream
+		// This streams data to cacheWriter (which feeds cacheReader -> storage.Create)
+		// while we copy to responseWriter
+		teeReader := io.TeeReader(blobReader, cacheWriter)
+
+		// Copy from TeeReader to response pipe
+		// This streams data to both cache (via TeeReader -> cacheWriter) and response (via pipe)
+		_, err := io.Copy(responseWriter, teeReader)
+		if err != nil {
+			// If copy fails, close pipes to signal error
+			responseWriter.CloseWithError(fmt.Errorf("failed to stream blob: %w", err))
+			cacheWriter.CloseWithError(fmt.Errorf("streaming failed: %w", err))
+			streamDone <- err
+			return
+		}
+
+		streamDone <- nil
+	}()
+
+	// Return response reader immediately (streaming starts in background)
+	// Wrap in a closer that handles cleanup and error monitoring
+	return &streamingBlobReader{
+		reader:         responseReader,
+		blobReader:     blobReader,
+		cacheWriter:    cacheWriter,
+		responseWriter: responseWriter,
+		cacheReader:    cacheReader,
+		cacheDone:      cacheDone,
+		streamDone:     streamDone,
+		size:           size,
+		ctx:            ctx,
+	}, size, nil
+}
+
+// CheckBlobExists checks if a blob exists
+func (s *DockerRegistryProxyService) CheckBlobExists(ctx context.Context, name, digest string) (bool, int64, error) {
+	cacheKey := s.getCacheKey(name, digest)
+
+	// Check cache first
+	meta, err := s.storage.GetMeta(ctx, models.ArtifactIdentifier{Hash: cacheKey})
+	if err == nil && meta != nil && !s.isCacheExpired(meta) {
+		return true, meta.Length, nil
+	}
+
+	// Check upstream
+	exists, size, err := s.client.CheckBlobExists(ctx, name, digest)
+	if err != nil {
+		return false, 0, err
+	}
+	return exists, size, nil
+}
+
+// CalculateDigest calculates SHA256 digest (exported for use in handlers)
+func (s *DockerRegistryProxyService) CalculateDigest(data []byte) string {
+	hasher := sha256.New()
+	hasher.Write(data)
+	return "sha256:" + hex.EncodeToString(hasher.Sum(nil))
+}
+
+// calculateDigest calculates SHA256 digest (internal method)
+func (s *DockerRegistryProxyService) calculateDigest(data []byte) string {
+	return s.CalculateDigest(data)
+}
+
+// streamingBlobReader wraps the response pipe reader and handles cleanup
+// It monitors both cache and stream operations for errors and ensures proper resource cleanup
+type streamingBlobReader struct {
+	reader         io.ReadCloser
+	blobReader     io.ReadCloser
+	cacheWriter    *io.PipeWriter
+	responseWriter *io.PipeWriter
+	cacheReader    *io.PipeReader
+	cacheDone      chan error
+	streamDone     chan error
+	size           int64
+	ctx            context.Context
+	closed         bool
+	mu             sync.Mutex
+}
+
+func (s *streamingBlobReader) Read(p []byte) (n int, err error) {
+	// Check if context is cancelled
+	if s.ctx != nil {
+		select {
+		case <-s.ctx.Done():
+			s.Close()
+			return 0, s.ctx.Err()
+		default:
+		}
+	}
+
+	// Read from response pipe
+	n, err = s.reader.Read(p)
+
+	// If read error, check if it's due to stream failure
+	if err != nil && err != io.EOF {
+		// Check for stream errors (non-blocking)
+		select {
+		case streamErr := <-s.streamDone:
+			if streamErr != nil {
+				// Stream failed - ensure cleanup
+				s.Close()
+				return n, fmt.Errorf("stream failed: %w", streamErr)
+			}
+		default:
+		}
+	}
+
+	return n, err
+}
+
+func (s *streamingBlobReader) Close() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.closed {
+		return nil
+	}
+	s.closed = true
+
+	var errs []error
+	closeErr := fmt.Errorf("close errors")
+
+	// Close response reader first (may block if writer is still active)
+	if s.reader != nil {
+		if err := s.reader.Close(); err != nil && err != io.ErrClosedPipe {
+			errs = append(errs, fmt.Errorf("response reader: %w", err))
+		}
+	}
+
+	// Close upstream blob reader
+	if s.blobReader != nil {
+		if err := s.blobReader.Close(); err != nil {
+			errs = append(errs, fmt.Errorf("blob reader: %w", err))
+		}
+	}
+
+	// Close response pipe writer (signals EOF to reader)
+	if s.responseWriter != nil {
+		if err := s.responseWriter.Close(); err != nil && err != io.ErrClosedPipe {
+			errs = append(errs, fmt.Errorf("response writer: %w", err))
+		}
+	}
+
+	// Close cache pipe writer (signals EOF to cache reader)
+	if s.cacheWriter != nil {
+		if err := s.cacheWriter.Close(); err != nil && err != io.ErrClosedPipe {
+			errs = append(errs, fmt.Errorf("cache writer: %w", err))
+		}
+	}
+
+	// Close cache pipe reader
+	if s.cacheReader != nil {
+		if err := s.cacheReader.Close(); err != nil && err != io.ErrClosedPipe {
+			errs = append(errs, fmt.Errorf("cache reader: %w", err))
+		}
+	}
+
+	// Check for errors from goroutines (non-blocking with timeout)
+	// Cache errors are logged but don't fail the request
+	select {
+	case cacheErr := <-s.cacheDone:
+		if cacheErr != nil {
+			// Cache write failed - this is acceptable, log but don't fail
+			// In production, you might want to log this
+			_ = cacheErr
+		}
+	case <-time.After(100 * time.Millisecond):
+		// Timeout - cache operation may still be in progress
+		// This is acceptable, cleanup will happen when cache pipe closes
+	}
+
+	select {
+	case streamErr := <-s.streamDone:
+		if streamErr != nil {
+			errs = append(errs, fmt.Errorf("stream: %w", streamErr))
+		}
+	case <-time.After(100 * time.Millisecond):
+		// Timeout - stream may have completed or is still in progress
+	}
+
+	if len(errs) > 0 {
+		return fmt.Errorf("%v: %v", closeErr, errs)
+	}
+
+	return nil
+}

@@ -136,11 +136,11 @@ func (h *HashComputingArtifactStorage) moveToFinalHash(
 	if err != nil {
 		return nil, fmt.Errorf("failed to read metadata after move: %w", err)
 	}
-	
+
 	// The metadata file still contains the temp hash in its Hash field
 	// Correct it to the computed hash before returning
 	finalMeta.Hash = computedHash
-	
+
 	return finalMeta, nil
 }
 

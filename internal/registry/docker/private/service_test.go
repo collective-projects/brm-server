@@ -50,10 +50,10 @@ func TestDockerRegistryPrivateServicePutManifest(t *testing.T) {
 
 	// Verify references were created by checking we can retrieve the manifest
 	digest := service.CalculateDigest(manifestData)
-	
+
 	// Calculate storage key (replicate the private method logic for testing)
 	storageKey := strings.ReplaceAll(digest, ":", "_")
-	
+
 	// Verify tag reference was created: {repo}:{tag}
 	tagRefName := fmt.Sprintf("%s:%s", name, reference)
 	tagRefData, err := service.storage.GetReference(ctx, storageKey, tagRefName, service.registryAlias)
@@ -62,7 +62,7 @@ func TestDockerRegistryPrivateServicePutManifest(t *testing.T) {
 	} else if tagRefData.Name != tagRefName {
 		t.Errorf("Tag reference name mismatch: expected %s, got %s", tagRefName, tagRefData.Name)
 	}
-	
+
 	// Verify repo reference was created
 	repoRefData, err := service.storage.GetReference(ctx, storageKey, name, service.registryAlias)
 	if err != nil {

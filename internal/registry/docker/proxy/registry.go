@@ -63,6 +63,7 @@ func NewDockerRegistryProxy(
 // SetupRoutes implements Registry interface.
 // This is called by RegistryManager to configure routes for this registry.
 func (d *DockerRegistryProxy) SetupRoutes(mux *http.ServeMux) error {
+	//TODO: implement service and uncomment below
 	// SetupRoutes(mux, d.service)
 	// return nil
 	return fmt.Errorf("Not Implemented !")

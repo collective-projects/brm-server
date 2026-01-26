@@ -569,7 +569,7 @@ func testArtifactStorageDelete(t *testing.T, storage models.ArtifactStorage) {
 	t.Run("delete_nonexistent_artifact", func(t *testing.T) {
 		ref := models.ArtifactReference{
 			Name:                "test",
-			Registry:                "test",
+			Registry:            "test",
 			ReferencedTimestamp: time.Now().Unix(),
 		}
 		err := storage.DeleteArtifact(ctx, models.ArtifactIdentifier{Hash: "nonexistent", Reference: &ref})

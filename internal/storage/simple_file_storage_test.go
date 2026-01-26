@@ -193,6 +193,7 @@ func TestSimpleFileStorageMultipleReferences(t *testing.T) {
 		t.Errorf("Expected 2 references, got %d", len(refHashes))
 	}
 }
+
 // TestSimpleFileStorageReferenceMerging tests merging references when creating existing artifact
 func TestSimpleFileStorageReferenceMerging(t *testing.T) {
 	baseDir := t.TempDir()
