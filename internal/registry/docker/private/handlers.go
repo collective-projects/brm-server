@@ -350,21 +350,9 @@ func handleStartBlobUpload(w http.ResponseWriter, r *http.Request, service *Dock
 
 // handleSingleRequestBlobUpload handles POST /v2/{name}/blobs/uploads/?digest={digest}
 func handleSingleRequestBlobUpload(w http.ResponseWriter, r *http.Request, service *DockerRegistryPrivateService, name, digest string) {
-	// Get content length
-	contentLength := r.ContentLength
-	if contentLength < 0 {
-		// Content-Length not provided, read all to determine size
-		data, err := io.ReadAll(r.Body)
-		if err != nil {
-			docker.WriteError(w, docker.ErrBlobUploadInvalid("failed to read blob data"))
-			return
-		}
-		contentLength = int64(len(data))
-		r.Body = io.NopCloser(strings.NewReader(string(data)))
-	}
-
-	// Upload blob directly
-	err := service.PutBlob(r.Context(), name, digest, r.Body, contentLength)
+	// r.ContentLength is -1 when the client didn't send Content-Length; PutBlob/storage
+	// already handle an unknown size, so the body is streamed through as-is either way.
+	err := service.PutBlob(r.Context(), name, digest, r.Body, r.ContentLength)
 	if err != nil {
 		if strings.Contains(err.Error(), "digest mismatch") {
 			docker.WriteError(w, docker.ErrBlobUploadInvalid("digest mismatch"))

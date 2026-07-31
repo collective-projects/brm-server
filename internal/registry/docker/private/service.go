@@ -8,12 +8,16 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"os"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/collective-projects/brm-server/internal/registry/docker"
+	"github.com/collective-projects/brm-server/internal/storage"
 	"github.com/collective-projects/brm-server/pkg/models"
+
+	"github.com/google/uuid"
 )
 
 // DockerRegistryPrivateService handles core registry logic for private registries
@@ -28,14 +32,17 @@ type DockerRegistryPrivateService struct {
 	sessionsMutex  sync.RWMutex
 }
 
-// UploadSession tracks an active blob upload
+// UploadSession tracks an active chunked blob upload. Chunk data is streamed to a temp file
+// on disk as it arrives (rather than accumulated in memory) so an upload's memory footprint
+// stays flat regardless of blob size.
 type UploadSession struct {
 	UUID      string
 	Name      string
-	Size      int64
 	Offset    int64
 	CreatedAt time.Time
-	Data      *bytes.Buffer // Accumulated blob data (for chunked uploads)
+
+	mu   sync.Mutex
+	file *os.File
 }
 
 // NewDockerRegistryPrivateService creates a new private Docker registry service
@@ -64,7 +71,7 @@ func (s *DockerRegistryPrivateService) SetStorage(storage models.ArtifactStorage
 	s.storage = storage
 }
 
-// cleanupExpiredSessions periodically removes expired upload sessions
+// cleanupExpiredSessions periodically removes expired upload sessions and their temp files.
 func (s *DockerRegistryPrivateService) cleanupExpiredSessions() {
 	ticker := time.NewTicker(1 * time.Hour)
 	defer ticker.Stop()
@@ -75,20 +82,37 @@ func (s *DockerRegistryPrivateService) cleanupExpiredSessions() {
 		for uuid, session := range s.uploadSessions {
 			if now.Sub(session.CreatedAt) > 1*time.Hour {
 				delete(s.uploadSessions, uuid)
+				session.discard(s.logger)
 			}
 		}
 		s.sessionsMutex.Unlock()
 	}
 }
 
+// discard closes and removes the session's temp file. Safe to call multiple times.
+func (session *UploadSession) discard(logger *slog.Logger) {
+	session.mu.Lock()
+	defer session.mu.Unlock()
+
+	if session.file == nil {
+		return
+	}
+	name := session.file.Name()
+	if err := session.file.Close(); err != nil {
+		logger.Warn("failed to close upload session temp file", "uuid", session.UUID, "path", name, "error", err)
+	}
+	if err := os.Remove(name); err != nil && !os.IsNotExist(err) {
+		logger.Warn("failed to remove upload session temp file", "uuid", session.UUID, "path", name, "error", err)
+	}
+	session.file = nil
+}
+
 // getStorageKey generates a storage key for a manifest or blob (using digest for content-addressable storage)
-// Strips the algorithm prefix (e.g., "sha256:") to use just the hex hash for storage
+// Strips the algorithm prefix (e.g., "sha256:") to use just the hex hash for storage.
+// Docker digests are in format "algorithm:hexhash" (e.g., "sha256:abc123..."); for storage,
+// we only need the hex part. Write paths (PutBlob) additionally require the algorithm to be
+// sha256 before trusting client-supplied digests as a storage key.
 func (s *DockerRegistryPrivateService) getStorageKey(digest string) string {
-	// TODO: We are thrusting the client to provide the correct digest format.
-	//       This may be recorded, validated, or normalized in the future.
-	//       Also, can this be used as a vulnerability if the client provides unexpected/wrong digests/hashes?
-	// Docker digests are in format "algorithm:hexhash" (e.g., "sha256:abc123...")
-	// For storage, we only need the hex part
 	if idx := strings.Index(digest, ":"); idx >= 0 {
 		return digest[idx+1:]
 	}
@@ -116,26 +140,6 @@ func (s *DockerRegistryPrivateService) calculateDigest(data []byte) string {
 // CalculateDigest calculates SHA256 digest (exported for use in handlers)
 func (s *DockerRegistryPrivateService) CalculateDigest(data []byte) string {
 	return s.calculateDigest(data)
-}
-
-// validateDigest validates that the content matches the expected digest
-func (s *DockerRegistryPrivateService) validateDigest(reader io.Reader, expectedDigest string, size int64) error {
-	hasher := sha256.New()
-	written, err := io.Copy(hasher, reader)
-	if err != nil {
-		return fmt.Errorf("failed to calculate digest: %w", err)
-	}
-
-	if size >= 0 && written != size {
-		return fmt.Errorf("size mismatch: expected %d bytes, got %d", size, written)
-	}
-
-	calculatedDigest := "sha256:" + hex.EncodeToString(hasher.Sum(nil))
-	if calculatedDigest != expectedDigest {
-		return fmt.Errorf("digest mismatch: expected %s, got %s", expectedDigest, calculatedDigest)
-	}
-
-	return nil
 }
 
 // GetManifest retrieves a manifest by name and reference
@@ -288,8 +292,8 @@ func (s *DockerRegistryPrivateService) PutManifest(ctx context.Context, name, re
 		CreatedTimestamp: time.Now().Unix(),
 	}
 
-	// Store manifest data by hash
-	// First, create with the hash to store the blob
+	// Store manifest data by hash. The digest here is self-computed from data (not
+	// client-claimed), so it's already trustworthy — no staging/validation needed.
 	_, err := s.storage.CreateArtifact(ctx, models.ArtifactIdentifier{Hash: storageKey}, bytes.NewReader(data), int64(len(data)), meta)
 	if err != nil {
 		if _, ok := err.(*models.HashConflictError); !ok {
@@ -320,34 +324,39 @@ func (s *DockerRegistryPrivateService) PutManifest(ctx context.Context, name, re
 	return nil
 }
 
-// StartBlobUpload creates a new blob upload session
+// StartBlobUpload creates a new blob upload session backed by a temp file on disk.
 func (s *DockerRegistryPrivateService) StartBlobUpload(ctx context.Context, name string) (string, error) {
 	s.logger.Debug("StartBlobUpload called", "name", name)
 
-	// Generate UUID for session
-	uuid := fmt.Sprintf("%d-%d", time.Now().UnixNano(), len(s.uploadSessions))
+	sessionUUID := uuid.New().String()
+
+	file, err := os.CreateTemp("", "brm-blob-upload-*.tmp")
+	if err != nil {
+		return "", fmt.Errorf("failed to create upload session temp file: %w", err)
+	}
 
 	session := &UploadSession{
-		UUID:      uuid,
+		UUID:      sessionUUID,
 		Name:      name,
-		Size:      0,
 		Offset:    0,
 		CreatedAt: time.Now(),
+		file:      file,
 	}
 
 	s.sessionsMutex.Lock()
-	s.uploadSessions[uuid] = session
+	s.uploadSessions[sessionUUID] = session
 	s.sessionsMutex.Unlock()
 
-	s.logger.Debug("Blob upload session created", "uuid", uuid, "name", name)
-	return uuid, nil
+	s.logger.Debug("Blob upload session created", "uuid", sessionUUID, "name", name)
+	return sessionUUID, nil
 }
 
-// UploadBlobChunk uploads a chunk of blob data to an existing session
-func (s *DockerRegistryPrivateService) UploadBlobChunk(ctx context.Context, name, uuid string, data io.Reader, offset int64) (int64, error) {
-	s.sessionsMutex.Lock()
-	session, exists := s.uploadSessions[uuid]
-	s.sessionsMutex.Unlock()
+// UploadBlobChunk streams a chunk of blob data directly to the session's temp file (never
+// buffering the whole blob in memory), and returns the new total offset.
+func (s *DockerRegistryPrivateService) UploadBlobChunk(ctx context.Context, name, sessionUUID string, data io.Reader, offset int64) (int64, error) {
+	s.sessionsMutex.RLock()
+	session, exists := s.uploadSessions[sessionUUID]
+	s.sessionsMutex.RUnlock()
 
 	if !exists {
 		return 0, fmt.Errorf("upload session not found")
@@ -357,42 +366,31 @@ func (s *DockerRegistryPrivateService) UploadBlobChunk(ctx context.Context, name
 		return 0, fmt.Errorf("session name mismatch")
 	}
 
-	// Read chunk data
-	chunkData, err := io.ReadAll(data)
+	session.mu.Lock()
+	defer session.mu.Unlock()
+
+	if session.file == nil {
+		return 0, fmt.Errorf("upload session already completed or discarded")
+	}
+
+	// Chunks are expected to arrive in order (offset matching the current end of the file);
+	// out-of-order chunks are appended as-is, matching prior behavior.
+	written, err := io.Copy(session.file, data)
 	if err != nil {
-		return 0, fmt.Errorf("failed to read chunk data: %w", err)
+		return 0, fmt.Errorf("failed to write chunk data: %w", err)
 	}
-
-	chunkSize := int64(len(chunkData))
-
-	// Update session - append chunk data
-	s.sessionsMutex.Lock()
-	if session.Data == nil {
-		session.Data = &bytes.Buffer{}
-	}
-	// Write chunk at specified offset (or append if offset matches current size)
-	if offset == session.Offset {
-		session.Data.Write(chunkData)
-		session.Offset += chunkSize
-		session.Size += chunkSize
-	} else {
-		// Offset mismatch - for now, just append (could implement proper offset handling)
-		session.Data.Write(chunkData)
-		session.Offset = int64(session.Data.Len())
-		session.Size = session.Offset
-	}
-	s.sessionsMutex.Unlock()
+	session.Offset += written
 
 	return session.Offset, nil
 }
 
-// CompleteBlobUpload finalizes a blob upload, validates digest, and stores the blob
-// The final chunk data should be provided in the request body (for PUT with digest)
-func (s *DockerRegistryPrivateService) CompleteBlobUpload(ctx context.Context, name, uuid, digest string, finalChunk io.Reader) error {
+// CompleteBlobUpload finalizes a blob upload, validates digest, and stores the blob.
+// The final chunk data (if any) should be provided in the request body (for PUT with digest).
+func (s *DockerRegistryPrivateService) CompleteBlobUpload(ctx context.Context, name, sessionUUID, digest string, finalChunk io.Reader) error {
 	s.sessionsMutex.Lock()
-	session, exists := s.uploadSessions[uuid]
+	session, exists := s.uploadSessions[sessionUUID]
 	if exists {
-		delete(s.uploadSessions, uuid)
+		delete(s.uploadSessions, sessionUUID)
 	}
 	s.sessionsMutex.Unlock()
 
@@ -401,108 +399,110 @@ func (s *DockerRegistryPrivateService) CompleteBlobUpload(ctx context.Context, n
 	}
 
 	if session.Name != name {
+		session.discard(s.logger)
 		return fmt.Errorf("session name mismatch")
 	}
+	defer session.discard(s.logger)
 
-	// Combine accumulated chunks with final chunk
-	var blobReader io.Reader
-	if session.Data != nil && session.Data.Len() > 0 {
-		if finalChunk != nil {
-			// Combine: accumulated data + final chunk
-			blobReader = io.MultiReader(bytes.NewReader(session.Data.Bytes()), finalChunk)
-		} else {
-			// Only accumulated data
-			blobReader = bytes.NewReader(session.Data.Bytes())
-		}
-	} else if finalChunk != nil {
-		// Only final chunk
-		blobReader = finalChunk
-	} else {
-		return fmt.Errorf("no blob data provided")
+	session.mu.Lock()
+	if session.file == nil {
+		session.mu.Unlock()
+		return fmt.Errorf("upload session already completed or discarded")
 	}
+	if _, err := session.file.Seek(0, io.SeekStart); err != nil {
+		session.mu.Unlock()
+		return fmt.Errorf("failed to rewind upload session data: %w", err)
+	}
+	sessionFile := session.file
+	session.mu.Unlock()
 
-	// Calculate total size
-	totalSize := int64(-1)
-	if session.Data != nil {
-		totalSize = int64(session.Data.Len())
-	}
+	// Stream the accumulated chunks plus any final chunk straight into PutBlob, without
+	// buffering either in memory. Total size is left unknown (-1); PutBlob/storage handle that.
+	var blobReader io.Reader = sessionFile
 	if finalChunk != nil {
-		// Read final chunk to get size (we'll need to buffer it for validation anyway)
-		finalData, err := io.ReadAll(finalChunk)
-		if err != nil {
-			return fmt.Errorf("failed to read final chunk: %w", err)
-		}
-		if totalSize >= 0 {
-			totalSize += int64(len(finalData))
-		} else {
-			totalSize = int64(len(finalData))
-		}
-		blobReader = io.MultiReader(
-			func() io.Reader {
-				if session.Data != nil && session.Data.Len() > 0 {
-					return bytes.NewReader(session.Data.Bytes())
-				}
-				return bytes.NewReader([]byte{})
-			}(),
-			bytes.NewReader(finalData),
-		)
+		blobReader = io.MultiReader(sessionFile, finalChunk)
 	}
 
-	// Use PutBlob to validate and store
-	return s.PutBlob(ctx, name, digest, blobReader, totalSize)
+	return s.PutBlob(ctx, name, digest, blobReader, -1)
 }
 
-// PutBlob uploads a blob directly in a single request with digest validation
+// PutBlob uploads a blob with digest validation.
+//
+// The stream is written to a temporary, unpublished storage key while being hashed; only if
+// the computed SHA-256 digest matches the caller-supplied digest is the content moved into its
+// final content-addressed location and a reference created. This ensures unvalidated content
+// is never stored (or left stored) under a hash it doesn't actually match, and a client cannot
+// force a digest under an unsupported/spoofed algorithm to be trusted as a storage key.
 func (s *DockerRegistryPrivateService) PutBlob(ctx context.Context, name, digest string, reader io.Reader, size int64) error {
 	s.logger.Debug("PutBlob called", "name", name, "digest", digest, "size", size)
 
+	if !strings.HasPrefix(digest, "sha256:") {
+		return fmt.Errorf("unsupported digest algorithm (only sha256 is supported): %s", digest)
+	}
 	storageKey := s.getStorageKey(digest)
 
-	// Use io.TeeReader to validate digest while streaming to storage
+	tempKey := "upload-" + uuid.New().String()
 	hasher := sha256.New()
 	teeReader := io.TeeReader(reader, hasher)
 
-	// Store blob while calculating digest simultaneously
+	if _, err := s.storage.CreateArtifact(ctx, models.ArtifactIdentifier{Hash: tempKey}, teeReader, size, nil); err != nil {
+		return fmt.Errorf("failed to stage blob upload: %w", err)
+	}
+
+	calculatedDigest := "sha256:" + hex.EncodeToString(hasher.Sum(nil))
+	if calculatedDigest != digest {
+		if cleanupErr := s.storage.DeleteArtifact(ctx, models.ArtifactIdentifier{Hash: tempKey}); cleanupErr != nil {
+			s.logger.Warn("failed to clean up staged blob after digest mismatch", "tempKey", tempKey, "error", cleanupErr)
+		}
+		return fmt.Errorf("digest mismatch: expected %s, got %s", digest, calculatedDigest)
+	}
+
+	if err := s.publishStagedBlob(ctx, tempKey, storageKey); err != nil {
+		return fmt.Errorf("failed to publish blob %s: %w", storageKey, err)
+	}
+
+	// Create reference link now that the blob is verified and published under storageKey.
 	ref := models.ArtifactReference{
 		Name:                name,
 		Registry:            s.registryAlias,
 		ReferencedTimestamp: time.Now().Unix(),
 	}
-	meta := &models.ArtifactMeta{
+	refMeta := &models.ArtifactMeta{
 		Hash:             storageKey,
-		Length:           size,
 		CreatedTimestamp: time.Now().Unix(),
 	}
-
-	// Create artifact with hash first (stores the blob)
-	_, err := s.storage.CreateArtifact(ctx, models.ArtifactIdentifier{Hash: storageKey}, teeReader, size, meta)
-	if err != nil {
-		if _, ok := err.(*models.HashConflictError); !ok {
-			return fmt.Errorf("failed to store blob: %w", err)
-		}
-		// Hash conflict is OK, verify digest and continue to add reference
-	}
-
-	// Verify digest matches
-	calculatedDigest := "sha256:" + hex.EncodeToString(hasher.Sum(nil))
-	if calculatedDigest != digest {
-		return fmt.Errorf("digest mismatch: expected %s, got %s", digest, calculatedDigest)
-	}
-
-	// Create reference link by calling CreateArtifact with the reference
 	refID := models.ArtifactIdentifier{
 		Hash:      storageKey,
 		Reference: &ref,
 	}
-	refMeta := &models.ArtifactMeta{
-		Hash:             storageKey,
-		Length:           size,
-		CreatedTimestamp: time.Now().Unix(),
-	}
-	_, err = s.storage.CreateArtifact(ctx, refID, bytes.NewReader(nil), size, refMeta)
-	if err != nil {
+	if _, err := s.storage.CreateArtifact(ctx, refID, nil, -1, refMeta); err != nil {
 		return fmt.Errorf("failed to create reference %s::%s: %w", ref.Registry, ref.Name, err)
 	}
 
+	return nil
+}
+
+// publishStagedBlob moves a validated, temporarily-staged blob to its final content-addressed
+// location. If another upload already published the same content concurrently (Move fails
+// because storageKey now exists), the staged copy is discarded instead of erroring.
+func (s *DockerRegistryPrivateService) publishStagedBlob(ctx context.Context, tempKey, storageKey string) error {
+	moveStorage, ok := s.storage.(storage.MoveStorage)
+	if !ok {
+		return fmt.Errorf("storage does not support Move, required to publish validated blobs")
+	}
+
+	if err := moveStorage.Move(ctx, tempKey, storageKey); err != nil {
+		if _, getErr := s.storage.GetMeta(ctx, models.ArtifactIdentifier{Hash: storageKey}); getErr == nil {
+			// Another concurrent upload published the same content first; discard ours.
+			if cleanupErr := s.storage.DeleteArtifact(ctx, models.ArtifactIdentifier{Hash: tempKey}); cleanupErr != nil {
+				s.logger.Warn("failed to clean up staged blob after concurrent publish", "tempKey", tempKey, "error", cleanupErr)
+			}
+			return nil
+		}
+		if cleanupErr := s.storage.DeleteArtifact(ctx, models.ArtifactIdentifier{Hash: tempKey}); cleanupErr != nil {
+			s.logger.Warn("failed to clean up staged blob after failed publish", "tempKey", tempKey, "error", cleanupErr)
+		}
+		return err
+	}
 	return nil
 }

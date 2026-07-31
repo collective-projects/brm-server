@@ -1,4 +1,9 @@
 ## HighPri
+    [ ] no authentication or authorization on any registry endpoint (see PLAN.md item 3) -
+        every /v2/* route is open to anyone with network access. Deliberately deferred until
+        an access manager (auth/authz, likely tied to the planned SERVING SUBSYSTEM
+        user management & multi-tenancy work in README.md) is designed - blocks any
+        deployment beyond a trusted network.
     [ ] add private registry interface.
     [ ] add proxy registry interface and framework implementation.
     [ ] add compound (proxy+private) interface and framework implementation.

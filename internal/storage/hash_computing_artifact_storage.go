@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
+	"log/slog"
 	"strings"
 
 	"github.com/collective-projects/brm-server/pkg/models"
@@ -23,6 +24,7 @@ type MoveStorage interface {
 // compute SHA-256 hashes when the hash is unknown (empty, length<3, or "UNKNOWN").
 type HashComputingArtifactStorage struct {
 	storage models.ArtifactStorage
+	logger  *slog.Logger
 }
 
 // NewHashComputingArtifactStorage creates a new HashComputingArtifactStorage wrapper.
@@ -32,12 +34,24 @@ func NewHashComputingArtifactStorage(storage models.ArtifactStorage) *HashComput
 	}
 	return &HashComputingArtifactStorage{
 		storage: storage,
+		logger:  slog.Default().With("component", "hash-computing-storage"),
 	}
 }
 
 // GetStorageInfo returns information about the storage by delegating to the wrapped storage.
 func (h *HashComputingArtifactStorage) GetStorageInfo() models.ArtifactStorageInfo {
 	return h.storage.GetStorageInfo()
+}
+
+// Move renames an artifact from srcHash to destHash by delegating to the wrapped storage,
+// which must implement MoveStorage. This lets HashComputingArtifactStorage itself satisfy
+// MoveStorage, as required of every ArtifactStorage implementation.
+func (h *HashComputingArtifactStorage) Move(ctx context.Context, srcHash, destHash string) error {
+	moveStorage, ok := h.storage.(MoveStorage)
+	if !ok {
+		return fmt.Errorf("underlying storage does not implement Move method")
+	}
+	return moveStorage.Move(ctx, srcHash, destHash)
 }
 
 // isUnknownHash checks if the hash should be treated as unknown.
@@ -80,10 +94,11 @@ func (h *HashComputingArtifactStorage) handleExistingHash(
 	tempMeta *models.ArtifactMeta,
 	meta *models.ArtifactMeta,
 ) (*models.ArtifactMeta, error) {
-	// Cleanup temp file
+	// Cleanup temp file; log but continue on failure (the temp artifact is orphaned in
+	// trash rather than lost, so a failed cleanup here isn't fatal to the caller).
 	if cleanupErr := h.cleanupTempHash(ctx, tempHash); cleanupErr != nil {
-		// Log cleanup error but continue
-		// The temp file will be cleaned up later or remain in trash
+		h.logger.Warn("failed to clean up temporary artifact after hash already existed",
+			"tempHash", tempHash, "computedHash", computedHash, "error", cleanupErr)
 	}
 
 	// Get existing metadata

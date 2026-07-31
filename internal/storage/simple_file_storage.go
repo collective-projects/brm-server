@@ -103,6 +103,13 @@ func (s *SimpleFileStorage) getTrashPath(hash string) (dir, blobPath, metaPath s
 	return
 }
 
+// ResolveIdentifier resolves an ArtifactIdentifier to its canonical storage hash.
+// Exposed (in addition to the internal resolveIdentifier) so wrapper storages, such as
+// ConcurrentArtifactStorage, can determine the correct lock key for reference-only identifiers.
+func (s *SimpleFileStorage) ResolveIdentifier(ctx context.Context, id models.ArtifactIdentifier) (string, error) {
+	return s.resolveIdentifier(id)
+}
+
 // resolveIdentifier resolves an ArtifactIdentifier to a hash.
 // If it has a hash, returns it directly. If it has a reference, looks up the ref file.
 func (s *SimpleFileStorage) resolveIdentifier(id models.ArtifactIdentifier) (string, error) {
